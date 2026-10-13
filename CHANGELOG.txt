@@ -1,6 +1,30 @@
 jaidi changelog
 ===============
 
+0.2.0 (2026-10-13)
+------------------
+
+Mostly the 3D view: skies, 3D objects and the edges between sectors now draw as in the
+original, and Enhanced mode lights levels in full color. Also a Pause key and a debug panel.
+
+- The Pause key pauses a level or a cinematic, with its music and sound, until it's pressed
+  again.
+- The Insert key opens a debug panel: where you are, your stats and inventory, the enemies,
+  frame times, and in cinematics the scene and its timing, with stepping and scrubbing. Pause
+  a level to use it with the mouse; it also has god mode and give everything.
+- Enhanced mode lights levels in full color from the game's own colormaps, smoothly, without
+  the headlamp's rings, and keeps their tints in the dark (Talay's walls go burnt orange).
+- 3D objects lit and clipped as in the original, their textures the right way up: Kyle's
+  ship over Talay shows whole and textured, and floor-like surfaces (the shuttle deck on
+  Detention Center) stay fixed instead of sliding.
+- Fixed: jumping into a sky showed the ceiling instead of the sky, and floors beyond showed
+  over the walls' tops.
+- Fixed: a strip of wall drawn up through Talay's sky near an opening, and a vertical line
+  while walking there.
+- Fixed: a flickering floor on Testbase, and ships flying over walls cut off by them.
+
+Still missing: settings and configuration screens.
+
 0.1.0 (2026-10-12)
 ------------------
 

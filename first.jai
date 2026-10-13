@@ -91,7 +91,9 @@ WINDOWS_GUI_LINKER_ARGUMENTS :: string.["/SUBSYSTEM:windows", "/ENTRY:mainCRTSta
 
 // Links a cross-compiled Windows build with the compiler's lld.
 link_windows :: (phase: *Message_Phase, output_path: string, release: bool, ship: bool) -> bool {
-    xwin := to_string(getenv("XWIN"));
+    // The cross-compile runs on Linux; a Windows host has no getenv to read XWIN with.
+    xwin: string;
+    #if OS != .WINDOWS  xwin = to_string(getenv("XWIN"));
     if !xwin xwin = "/opt/xwin";
     if !is_directory(xwin) {
         log_error("No MSVC and Windows SDK libraries at %. Unpack them with xwin splat and point XWIN there.", xwin);

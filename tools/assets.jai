@@ -468,7 +468,8 @@ draw_model :: (asset: *Asset, p: Preview, colormap: *Colormap) {
         } else if polygon.shading == {
             case .FLAT;    mode = .FLAT;
             case .GOURAUD; mode = ifx intensities then .SHADED else .FLAT;
-            case .TEXTURE; mode = .TEXTURE_DEPTH;
+            // One light for the polygon, as FLAT (0x5f7cc); only PLANE is lit by depth.
+            case .TEXTURE; mode = .TEXTURE_FLAT;
             case .GOURTEX; mode = ifx intensities then .TEXTURE_SHADED else .TEXTURE_DEPTH;
             case .PLANE;   mode = .TEXTURE_DEPTH;
         }
@@ -482,9 +483,10 @@ draw_model :: (asset: *Asset, p: Preview, colormap: *Colormap) {
             v := transformed[index];
             uv := polygon.uvs[it];
             if polygon.shading == .PLANE {
-                // Projected from above in model space, like a floor (8 texels to a unit).
+                // Projected from above in model space, like a floor of a sector with no offset
+                // (8 texels to a unit, u against x; see draw_model).
                 m := model.vertices[index];
-                uv = .{m.x * 8, m.z * 8};
+                uv = .{-m.x * 8, m.z * 8};
             }
             light := ifx (mode == .SHADED || mode == .TEXTURE_SHADED) then intensities[index] else flat_light;
             corners[it] = .{v, uv, light, v.z, color};

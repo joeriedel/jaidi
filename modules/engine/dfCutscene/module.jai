@@ -44,16 +44,24 @@ cutscene_shutdown :: () {
 cutscene_start :: (id: s32, now: u64) -> bool {
     // Every scene's in-betweens fitting from now, so later ones are ready when they come up.
     cutscene_prepare_fits(id);
-    cut.start_ns = now;
-    cut.clock = .{};
-    cut.palette = .{};
-    cut.fade = .{};
-    emit_clear_canvas();
-    emit_clear_video();
-    start_scene(id);
-    if !cut.scene return false;
-    begin_frame();
-    return true;
+    return start_cutscene(id, now);
+}
+
+// Plays the scene from its start up to the cell as fast as it can, without its sounds, and
+// goes on from there; the music carries on. The scene starts as a cutscene does, not as the
+// scene before it left the screen and the palette. Returns where the cutscene then is on the
+// clock cutscene_update gets, for the caller to carry on from; false when the scene can't
+// play.
+cutscene_seek :: (id: s32, cell: s32) -> bool, u64 {
+    close_scene();
+    stop_sounds(keep_marked = false);
+    cut.seeking = true;
+    start_cutscene(id, 0);
+    while cut.scene && cut.scene.id == id && cut.film.cell < cell  run_event();
+    cut.seeking = false;
+    if !cut.scene return false, 0;
+    film_send_cues(*cut.film);
+    return true, cast(u64) (cut.clock.event * 1_000_000_000.0);
 }
 
 cutscene_is_playing :: () -> bool {
@@ -180,6 +188,7 @@ cut: struct {
         last_frame_ticks: s32;  // Landru ticks the last wait counted.
     };
     skip_pressed, next_pressed: bool;
+    seeking: bool;              // cutscene_seek playing ahead: no sounds or music cues.
 };
 
 // The text crawl's actor, if the scene is the crawl's.
@@ -198,6 +207,19 @@ get_scene_archive_path :: (entry: *Cutscene_Entry) -> string {
 }
 
 #scope_file
+
+start_cutscene :: (id: s32, now: u64) -> bool {
+    cut.start_ns = now;
+    cut.clock = .{};
+    cut.palette = .{};
+    cut.fade = .{};
+    emit_clear_canvas();
+    emit_clear_video();
+    start_scene(id);
+    if !cut.scene return false;
+    begin_frame();
+    return true;
+}
 
 // Ticks per frame by scene speed, 4 to 20. Not 291.3 / speed: the table was evidently set by
 // eye.
@@ -244,7 +266,7 @@ close_scene :: () {
 begin_frame :: () {
     if cut.time == 0  film_rewind(*cut.film);
     else              film_step(*cut.film);
-    film_send_cues(*cut.film);
+    if !cut.seeking  film_send_cues(*cut.film);
     film_sort_actors(*cut.film);
     emit_clear_canvas();
     film_draw(*cut.film);
@@ -337,6 +359,7 @@ go_to_scene :: (id: s32) {
 #load "sound.jai";
 #load "gpu.jai";
 #load "motion.jai";
+#load "debug.jai";
 
 #import "Basic";
 #import "Math";

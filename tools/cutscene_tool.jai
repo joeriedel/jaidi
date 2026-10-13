@@ -142,6 +142,11 @@ get_cutscene_tool_clock :: () -> u64, bool {
     return t.time, t.driving;
 }
 
+// For the debug panel, while the tool plays a cutscene: its clock paused or not, and set.
+set_cutscene_tool_paused :: (paused: bool) { cutscene_tool.paused = paused; }
+is_cutscene_tool_paused :: () -> bool { return cutscene_tool.paused; }
+set_cutscene_tool_time :: (time: u64) { cutscene_tool.time = time; }
+
 // --tool cutscene with --scene: that scene, selected and playing.
 request_tool_cutscene :: (scene: s32) {
     cutscene_tool.selected = scene;

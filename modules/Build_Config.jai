@@ -7,4 +7,4 @@ GAME_NAME :: "jaidi";
 TITLE :: "Dark Forces";
 
 // The release version (semver). A release is tagged v<VERSION> in svn and on GitHub.
-VERSION :: "0.1.0";
+VERSION :: "0.2.0";

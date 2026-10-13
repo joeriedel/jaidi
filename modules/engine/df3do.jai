@@ -281,7 +281,8 @@ parse_model :: (model: *Model, text: string, get_texture_size: (string) -> (s32,
                     index, ok_index := string_to_int(t.items[c]);
                     if ok_index && index >= 0 && index < texture_vertices.count {
                         tv := texture_vertices[index];
-                        p.uvs[c] = .{tv.x * width, tv.y * height};
+                        // The file's v counts up from the texture's bottom row.
+                        p.uvs[c] = .{tv.x * width, (1 - tv.y) * height};
                     }
                 }
             }

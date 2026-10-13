@@ -66,6 +66,16 @@ audio_unlock :: () {
     if music_stream SDL_UnlockAudioStream(music_stream);
 }
 
+// Every stream held where it is, music and sounds, and let go again. The callbacks stop with
+// them, iMUSE's ticks included, so everything carries on from the same sample.
+audio_pause :: (paused: bool) {
+    for stream: (*SDL_AudioStream).[music_stream, digital_stream, sound_stream] {
+        if !stream continue;
+        if paused  SDL_PauseAudioStreamDevice(stream);
+        else       SDL_ResumeAudioStreamDevice(stream);
+    }
+}
+
 audio_set_music_volume :: (gain: float) {
     if music_stream SDL_SetAudioStreamGain(music_stream, gain);
 }

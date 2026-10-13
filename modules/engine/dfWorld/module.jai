@@ -88,6 +88,7 @@ FRAME_TICKS :: 2;               // The least a level frame takes (0x10bd6).
 World_Draw_Options :: struct {
     original := true;   // The original's 320x200 view; otherwise the view's own size.
     palette: *Palette;  // Shown in place of the level's (the Esc menu's grey, fades).
+    light_only: bool;   // Enhanced: lit drawing white, to show the light alone (debug).
 }
 
 // The palette the level shows in this frame: its own, with the HUD's colors and the screen's
@@ -137,6 +138,7 @@ world_load :: (name: string, difficulty: s32 = DIFFICULTY_MEDIUM) -> bool {
     if !cmp_found  cmp_data, cmp_found = gob_find("SECBASE.CMP");
     if cmp_found  world.colormap = cmp_parse(cmp_data);
     world.gpu_colormap = render_upload_colormap(*world.colormap);
+    world.smooth_ramp = smooth_light_ramp(world.colormap.light_ramp);
 
     load_textures();
     place_objects();
@@ -252,6 +254,7 @@ world_get_level_list :: () -> [] Level_Entry {
 #load "draw.jai";
 #load "bot.jai";
 #load "tasks.jai";
+#load "debug.jai";
 
 #scope_module
 
@@ -280,6 +283,7 @@ world: struct {
     palette: Palette;
     colormap: Colormap;
     gpu_colormap: Gpu_Colormap;
+    smooth_ramp: [LIGHT_RAMP_COUNT] float;  // The colormap's light ramp smoothed, for Enhanced.
     textures: [..] World_Texture;   // By the level's texture index.
     sprites, frames, models: [..] World_Art;    // By the O file's lists.
     objects: [..] *Object;          // objects.jai

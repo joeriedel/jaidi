@@ -458,6 +458,22 @@ secbase_rifle_kills_officer :: () {
     check(world_get_actor(xx officer) == null, "the officer is still there");
 } @test
 
+// A level left from the tools keeps the weapon in hand for the next, as a mission's end does.
+next_level_starts_with_the_weapon_kept :: () {
+    skip_without_dark();
+    saved := world_get_agent().*;
+    defer world_get_agent().* = saved;
+    if !start_level("SECBASE") return;
+    world_give_weapon(WEAPON_RIFLE);
+    if !run(60, .{}) { world_unload(); return; }
+    world_keep_weapon();
+    world_unload();
+    if !start_level("TALAY") return;
+    defer world_unload();
+    if !run(60, .{}) return;
+    check(world_get_weapon() == WEAPON_RIFLE, "weapon % in hand at the next start", world_get_weapon());
+} @test
+
 // The fists: three punches spread across the view, after the arm is drawn back; an officer
 // in front is hurt.
 secbase_fists_punch_officer :: () {

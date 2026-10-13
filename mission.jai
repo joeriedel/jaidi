@@ -66,11 +66,17 @@ start_play :: (scene: s32 = CUTSCENE_OPENING) {
 
 is_esc_menu_up :: () -> bool { return play.esc != .NONE; }
 
+is_opening_playing :: () -> bool { return play.active && play.screen == .OPENING && cutscene_is_playing(); }
+
 is_menu_shown :: () -> bool { return play.screen == .AGENT_MENU || play.screen == .BRIEFING || play.esc == .MENU; }
 
 // Once a frame: on to the next step when the one shown is done.
 update_play :: (window: *SDL_Window, in_tools: *bool, running: *bool) {
-    if !play.active return;
+    if !play.active {
+        // A level from the tools has the Esc menu too.
+        if game.playing  update_esc_menu(window, in_tools, running);
+        return;
+    }
     if play.screen == {
         case .OPENING;
             if cutscene_is_playing() return;
@@ -107,7 +113,7 @@ update_play :: (window: *SDL_Window, in_tools: *bool, running: *bool) {
     }
 }
 
-// Esc in a mission.
+// Esc in a level.
 open_esc_menu :: () {
     if play.esc != .NONE return;
     play.esc = .FADE_OUT;
@@ -202,7 +208,9 @@ send_menu_mouse :: () {
     sy := cast(s32) floor((y - (p0.y - viewport.Pos.y)) * 200 / (p1.y - p0.y));
     // Either button, as in the original: masks 1 << (button - 1).
     mask := (cast(u32) 1 << (SDL_BUTTON_LEFT - 1)) | (cast(u32) 1 << (SDL_BUTTON_RIGHT - 1));
-    menu_move_mouse(sx, sy, (buttons & mask) != 0);
+    // Not a click on the debug panel over the menu.
+    pressed := (buttons & mask) != 0 && !is_debug_panel_using_mouse();
+    menu_move_mouse(sx, sy, pressed);
     // And the shift keys, which the PDA's Space reads as it takes the key.
     shift := (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
     #if DEV  if is_input_ignored()  shift = false;
@@ -302,7 +310,8 @@ get_agent :: () -> *Agent_Record {
 
 open_agent_menu :: () {
     if !mission_titles  for world_get_level_list()  array_add(*mission_titles, it.title);
-    if menu_open_agents(*agents, mission_titles, current_agent, cutscene_get_frame_delay()) {
+    // Dev builds open every mission, to get to any of them quickly.
+    if menu_open_agents(*agents, mission_titles, current_agent, cutscene_get_frame_delay(), all_open = DEV) {
         play.screen = .AGENT_MENU;
     } else {
         // Without the agent menu, the agent chosen plays from its mission.
@@ -426,6 +435,12 @@ update_esc_menu :: (window: *SDL_Window, in_tools: *bool, running: *bool) {
         return;
     }
     play.esc = .NONE;
+    // A level from the tools: its way out goes back to them, or quits.
+    if !play.active {
+        stop_level(window, in_tools);
+        if result == xx Esc_Result.QUIT  running.* = false;
+        return;
+    }
     complete := world_is_mission_complete();
     if result == {
         case xx Esc_Result.NEXT;

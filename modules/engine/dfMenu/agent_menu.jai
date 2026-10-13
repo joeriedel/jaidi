@@ -12,15 +12,17 @@
 // agents are listed by name, without case, the free ones last.
 
 // Opens the menu over the agents and the missions' titles, from current's record. frame_delay
-// in Landru ticks. The result: the mission to play, or 0 for Exit.
-menu_open_agents :: (agents: *Agents, missions: [] string, current: s32, frame_delay: s32) -> bool {
+// in Landru ticks. The result: the mission to play, or 0 for Exit. With all_open (dev builds),
+// every mission may be played, whatever the agent has done.
+menu_open_agents :: (agents: *Agents, missions: [] string, current: s32, frame_delay: s32, all_open := false) -> bool {
     if !open_menu("agentmnu.lfd", "agentmnu", "agentmnu", frame_delay) return false;
     a := *agent_menu;
     a.agents = agents;
     a.missions = missions;
     a.mission_count = cast(s32) min(missions.count, AGENT_MISSIONS);
+    a.all_open = all_open;
     // Each agent's mission is one it may play (0x198e4).
-    for * agents.records  it.selected = max(cast(s32) 1, min(it.selected, it.next, a.mission_count));
+    for * agents.records  it.selected = max(cast(s32) 1, min(it.selected, get_open_missions(it)));
     sort_agents();
     a.current = 0;
     for a.order  if it == current  a.current = xx it_index;
@@ -67,6 +69,7 @@ agent_menu: struct {
     agents: *Agents;
     missions: [] string;
     mission_count: s32;
+    all_open: bool;             // Every mission open (dev builds).
     order: [AGENT_SLOTS] s32;   // The records by name.
     current: s32;               // Into order.
     lists: [2] List;
@@ -77,6 +80,12 @@ agent_menu: struct {
 
 // The list with the keys, kept from one visit to the next (0xf8d78).
 focus: s32 = LIST_AGENTS;
+
+// How many missions the agent may play: up to the highest it has open.
+get_open_missions :: (record: *Agent_Record) -> s32 {
+    a := *agent_menu;
+    return ifx a.all_open then a.mission_count else min(record.next, a.mission_count);
+}
 
 get_agent :: () -> *Agent_Record {
     a := *agent_menu;
@@ -98,7 +107,7 @@ refresh_lists :: () {
     agents.count, agents.selected, agents.invalid = count, a.current, true;
     record := get_agent();
     missions := *a.lists[LIST_MISSIONS];
-    missions.count = min(record.next, a.mission_count);
+    missions.count = get_open_missions(record);
     missions.selected = record.selected - 1;
     missions.invalid = true;
 }
@@ -189,7 +198,7 @@ on_agent_button :: (id: s32) {
             open_agent_dialog(.EXIT);
         case BUTTON_BEGIN;
             record := get_agent();
-            if record.name[0] && record.selected >= 0 && record.selected <= record.next  menu.result = record.selected;
+            if record.name[0] && record.selected >= 0 && record.selected <= get_open_missions(record)  menu.result = record.selected;
     }
 }
 

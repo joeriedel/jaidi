@@ -44,15 +44,20 @@
 //   --level-walk-after FRAME   start walking (--level-walk) on that frame
 //   --level-strafe FRAMES      strafe right for that many frames
 //   --level-at X,Y,Z           start there instead (feet on the floor of the sector holding it)
+//   --level-tick N             run the level's logic to tick N before the first frame, the
+//                              player standing at the start (the debug panel shows the tick)
 //   --level-bot                let the bot play: it fights what it sees, else goes to the
 //                              nearest enemy (for footage; see dfWorld/bot.jai)
 //   --level-god                the player can't be hurt (the cheat's invincibility)
+//   --level-light-only         Enhanced: draw lit surfaces white at their light, without the
+//                              art (as the debug panel's Lighting only)
 //   --level-input FROM:TO:KEYS hold the level's keys from frame FROM up to TO, joined by +:
 //                              forward, back, left, right (strafe), turn_left, turn_right,
 //                              look_up, look_down, run, walk, jump, crouch, use, fire,
 //                              fire_secondary; may be given more than once
-//   --key FRAME:NAME           press the key (SDL's name: Return, Escape, Y) on that frame of
-//                              a --screenshot run, as if typed; may be given more than once
+//   --key FRAME:NAME           press the key (SDL's name: Return, Escape, Y; Shift+ before it
+//                              with Shift) on that frame of a --screenshot run, as if typed;
+//                              may be given more than once
 // (--cutscene-diff runs unsynced to the display, a fixed 1/60 s a frame; see cutscene_runs.jai.)
 
 // Returns true when the app should start in the tools screen.
@@ -83,6 +88,7 @@ parse_dev_command_line :: () -> bool {
             case "--level";      dev_options.level = value; i += 1;
             case "--level-turn"; dev_options.level_turn = string_to_float(value); i += 1;
             case "--level-pitch"; dev_options.level_pitch = string_to_float(value); i += 1;
+            case "--level-tick"; dev_options.level_tick = xx string_to_int(value); i += 1;
             case "--level-walk"; dev_options.level_walk = string_to_int(value); i += 1;
             case "--level-strafe"; dev_options.level_strafe = string_to_int(value); i += 1;
             case "--level-run";  dev_options.level_run = true;
@@ -113,6 +119,7 @@ parse_dev_command_line :: () -> bool {
                 i += 1;
             case "--level-bot";  dev_options.level_bot = true;
             case "--level-god";  dev_options.level_god = true;
+            case "--level-light-only";  dev_options.level_light_only = true;
             case "--level-input";
                 if !add_dev_level_input(value)  print("--level-input wants FROM:TO:KEYS, not '%'.\n", value);
                 i += 1;
@@ -121,6 +128,7 @@ parse_dev_command_line :: () -> bool {
                 if found {
                     k := array_add(*dev_options.keys);
                     k.frame = string_to_int(frame);
+                    if begins_with(name, "Shift+") { k.shift = true; advance(*name, 6); }
                     k.key = SDL_GetKeyFromName(temp_c_string(name));
                     k.name = sprint("%\0", name);
                     k.name.count -= 1;
@@ -128,6 +136,7 @@ parse_dev_command_line :: () -> bool {
                 if !found  print("--key wants FRAME:NAME, not '%'.\n", value);
                 i += 1;
             case "--x11";        // Read by main before SDL starts.
+            case "--ci-test";    i += 1;  // ci_test.jai's, also read before SDL starts.
             case; print("Unknown option '%'.\n", arg);
         }
         i += 1;
@@ -164,6 +173,10 @@ apply_dev_level_input :: (input: *World_Input) {
         input.mouse_x += d.level_turn / 360.0 * 16384 / 8;
     }
     if !d.level_frame {
+        // Invincible first, or the run to the tick can get the player killed.
+        if d.level_god  world_get_player_state().invincible = -2;
+        // Paths, elevators and the rest moved on by the clock, a fixed frame at a time.
+        while world_get_tick() < d.level_tick  world_update(0, .{}, fixed_step = true);
         player := world_get_player();
         player.pitch = cast(s32) (d.level_pitch / 360.0 * 16384);
         if d.level_placed && !world_place_player(d.level_at)  print("No sector holds %.\n", d.level_at);
@@ -171,7 +184,6 @@ apply_dev_level_input :: (input: *World_Input) {
         if d.level_goggles { world_get_agent().items[Item_Slot.GOGGLES] = -1; world_toggle_goggles(); }
         if d.level_mask    { world_get_agent().items[Item_Slot.MASK] = -1; world_toggle_mask(); }
         if d.level_weapon >= 0  world_give_weapon(xx d.level_weapon);
-        if d.level_god  world_get_player_state().invincible = -2;
         if d.level_bot  world_reset_bot();
         if d.level_yawed {
             player.yaw = (cast(s32) (d.level_yaw / 360.0 * 16384)) & 0x3FFF;
@@ -245,6 +257,7 @@ send_dev_clicks :: () {
             event.key.type = .KEY_DOWN;
             event.key.key = it.key;
             event.key.down = true;
+            if it.shift  event.key.mod = SDL_KMOD_SHIFT;
         }
         SDL_PushEvent(*event);
     }
@@ -253,6 +266,7 @@ send_dev_clicks :: () {
 is_enhanced_requested :: () -> bool { return dev_options.enhanced; }
 is_original_requested :: () -> bool { return dev_options.original; }
 is_status_hidden :: () -> bool { return dev_options.hide_status; }
+is_light_only_requested :: () -> bool { return dev_options.level_light_only; }
 
 // Automated runs (screenshots, dumps, the diff) take no input from the real keyboard and
 // mouse, so whoever is at the machine can't change what they capture. The --key presses are
@@ -265,82 +279,25 @@ is_automated_run_requested :: () -> bool {
     return false;
 }
 
-is_device_input :: (event: *SDL_Event) -> bool {
-    if cast(SDL_EventType) event.type == {
-        case .KEY_DOWN; #through;
-        case .KEY_UP;        return event.key.windowID != 0;
-        case .TEXT_INPUT;    return event.text.windowID != 0;
-        case .TEXT_EDITING;  return event.edit.windowID != 0;
-        case .MOUSE_MOTION; #through;
-        case .MOUSE_BUTTON_DOWN; #through;
-        case .MOUSE_BUTTON_UP; #through;
-        case .MOUSE_WHEEL;   return true;
-    }
-    return false;
-}
-
-// Called with the frame's command buffer once the window is drawn: when it is time, draws the
-// same UI into a texture of its own and queues it to be read back.
+// Called with the frame's command buffer once the window is drawn: when it is time, queues the
+// frame to be saved.
 capture_dev_screenshot :: (device: *SDL_GPUDevice, command_buffer: *SDL_GPUCommandBuffer, draw_data: *ImDrawData, format: SDL_GPUTextureFormat) {
     if !dev_options.screenshot return;
     dev_options.frame += 1;
     if dev_options.frame < dev_options.screenshot_frame || dev_options.frame >= dev_options.screenshot_frame + dev_options.dump_count return;
-
-    width  := cast(u32) (draw_data.DisplaySize.x * draw_data.FramebufferScale.x);
-    height := cast(u32) (draw_data.DisplaySize.y * draw_data.FramebufferScale.y);
-    info: SDL_GPUTextureCreateInfo;
-    info.type = ._2D;
-    info.format = format;
-    info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
-    info.width = width;
-    info.height = height;
-    info.layer_count_or_depth = 1;
-    info.num_levels = 1;
-    texture := SDL_CreateGPUTexture(device, *info);
-    defer SDL_ReleaseGPUTexture(device, texture);
-
-    target: SDL_GPUColorTargetInfo;
-    target.texture = texture;
-    target.clear_color = .{0, 0, 0, 1};
-    target.load_op = .CLEAR;
-    target.store_op = .STORE;
-    pass := SDL_BeginGPURenderPass(command_buffer, *target, 1, null);
-    im_render(draw_data, command_buffer, pass);
-    SDL_EndGPURenderPass(pass);
-
-    transfer_info := SDL_GPUTransferBufferCreateInfo.{usage = .DOWNLOAD, size = width * height * 4};
-    dev_options.transfer = SDL_CreateGPUTransferBuffer(device, *transfer_info);
-    dev_options.width, dev_options.height = width, height;
-    dev_options.bgra = format == .B8G8R8A8_UNORM || format == .B8G8R8A8_UNORM_SRGB;
-    copy := SDL_BeginGPUCopyPass(command_buffer);
-    region := SDL_GPUTextureRegion.{texture = texture, w = width, h = height, d = 1};
-    destination := SDL_GPUTextureTransferInfo.{transfer_buffer = dev_options.transfer};
-    SDL_DownloadFromGPUTexture(copy, *region, *destination);
-    SDL_EndGPUCopyPass(copy);
+    queue_frame_capture(*dev_options.capture, device, command_buffer, draw_data, format);
 }
 
 // After the frame is submitted: writes a queued screenshot. Returns true when the app should quit:
 // after the last frame to save.
 finish_dev_screenshot :: (device: *SDL_GPUDevice) -> bool {
-    if !dev_options.transfer return false;
-    SDL_WaitForGPUIdle(device);
-    pixels := cast(*u8) SDL_MapGPUTransferBuffer(device, dev_options.transfer, false);
-    count := dev_options.width * dev_options.height;
-    for 0..count-1 {
-        p := pixels + it * 4;
-        if dev_options.bgra  p[0], p[2] = p[2], p[0];
-        p[3] = 255;
-    }
+    if !is_frame_capture_queued(dev_options.capture) return false;
     path := dev_options.screenshot;
     if dev_options.dump_dir {
         make_directory_if_it_does_not_exist(dev_options.dump_dir, recursive = true);
         path = tprint("%/frame_%.png", dev_options.dump_dir, formatInt(dev_options.frame, minimum_digits = 5));
     }
-    ok := stbi_write_png(temp_c_string(path), xx dev_options.width, xx dev_options.height, 4, pixels, xx (dev_options.width * 4));
-    SDL_UnmapGPUTransferBuffer(device, dev_options.transfer);
-    SDL_ReleaseGPUTransferBuffer(device, dev_options.transfer);
-    dev_options.transfer = null;
-    if !ok  print("Couldn't write %\n", path);
+    ok := write_frame_capture(*dev_options.capture, device, path);
     last := dev_options.frame >= dev_options.screenshot_frame + dev_options.dump_count - 1;
     if ok && (last || !dev_options.dump_dir)  print("Saved %\n", ifx dev_options.dump_dir then tprint("% frames in %", dev_options.dump_count, dev_options.dump_dir) else path);
     if dev_options.level && world_is_loaded()  print_player_report();
@@ -404,6 +361,7 @@ add_dev_level_input :: (value: string) -> bool {
 Dev_Key :: struct {
     frame: int;
     key: SDL_Keycode;
+    shift: bool;
     name: string;               // Zero-terminated: a single character goes as text.
     sent_frame := -1;
 }
@@ -420,7 +378,8 @@ dev_options: struct {
     level: string;
     level_turn, level_pitch: float;
     level_walk, level_strafe, level_frame: int;
-    level_run, level_headlight, level_goggles, level_mask, level_yawed, hide_status, level_bot, level_god: bool;
+    level_tick: s32;
+    level_run, level_headlight, level_goggles, level_mask, level_yawed, hide_status, level_bot, level_god, level_light_only: bool;
     level_yaw: float;
     level_use := -1;
     level_fire := -1;
@@ -434,16 +393,13 @@ dev_options: struct {
     keys: [..] Dev_Key;
     level_inputs: [..] Dev_Level_Input;
     frame: int;
-    transfer: *SDL_GPUTransferBuffer;
-    width, height: u32;
-    bgra: bool;
+    capture: Frame_Capture;
 };
 
 #import "Basic";
 #import "File";
 #import "String";
 #import "Math";
-#import "stb_image_write";
 #import "engine/vendor/SDL3";
 #import "engine/vendor/ImGui";
 #import "engine/dfImGui";

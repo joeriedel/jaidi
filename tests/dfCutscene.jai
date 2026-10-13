@@ -181,6 +181,50 @@ retail_opening_plays_through :: () {
     }
 } @test
 
+// Seeking to a cell shows what playing the scene from its start to that cell does, the same
+// screen in the same palette, forward from the start or back from later, and starts no sound.
+retail_seek_matches_playing :: () {
+    skip_without_dark();
+    dark_dir := find_dark_data_dir();
+    if !check(gob_mount_retail(dark_dir), "can't mount the GOBs")  return;
+    defer gob_unmount_all();
+    if !check(cutscene_init(), "CUTSCENE.LST didn't load")  return;
+    defer cutscene_shutdown();
+    imuse_init();
+    if !check(imuse_load_digital_tables(dark_dir), "iMUSE's tables didn't load")  return;
+
+    // LOGO fades in and out; 1E has sounds and moving actors.
+    for scene: s32.[CUTSCENE_OPENING, 40] {
+        for cell: s32.[25, 60] {
+            if !check(cutscene_start(scene, 0), "scene % didn't start", scene)  return;
+            now: u64;
+            while cutscene_get_scene() == scene && cutscene_get_cell() < cell {
+                now += 1_000_000;
+                cutscene_update(now);
+            }
+            if !check(cutscene_get_scene() == scene, "scene % ended before cell %", scene, cell) continue;
+            video := array_copy(cutscene_get_video(),, temp);
+            palette := cutscene_get_palette();
+            // From further on, back to the cell.
+            cutscene_update(now + 3_000_000_000);
+            check(cutscene_get_scene() != scene || cutscene_get_cell() > cell, "scene % cell %: didn't play on", scene, cell);
+            ok, time := cutscene_seek(scene, cell);
+            check(ok && cutscene_get_scene() == scene && cutscene_get_cell() == cell, "scene % cell %: seek to % went to scene % cell %", scene, cell, cell, cutscene_get_scene(), cutscene_get_cell());
+            check(time == cutscene_get_next_event_time(), "scene % cell %: time % for next event %", scene, cell, time, cutscene_get_next_event_time());
+            seeked := cutscene_get_video();
+            check(seeked.count == video.count && memcmp(seeked.data, video.data, video.count) == 0, "scene % cell %: the screen differs", scene, cell);
+            seeked_palette := cutscene_get_palette();
+            check(memcmp(*seeked_palette, *palette, size_of(Palette)) == 0, "scene % cell %: the palette differs", scene, cell);
+            out := NewArray(IMUSE_DIGITAL_RATE / 10 * 2, u8,, temp);
+            imuse_mix_digital(out);
+            silent := true;
+            for out  if it != 128 { silent = false; break; }
+            check(silent, "scene % cell %: sound after the seek", scene, cell);
+            cutscene_stop();
+        }
+    }
+} @test
+
 #scope_file
 
 append_u16 :: (bytes: *[..] u8, v: s64) {
@@ -202,3 +246,4 @@ append_object :: (bytes: *[..] u8, type: string, name: string, block: s32, comma
 #import "engine/dfArchive";
 #import "engine/dfCutscene";
 #import "engine/dfIMuse";
+#import "engine/dfImage";

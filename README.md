@@ -71,6 +71,8 @@ The whole game plays, every enemy and boss included. Not there yet: settings and
 |----------|---|
 | F11 | fullscreen on or off |
 | F12 | Enhanced mode on or off (see below) |
+| Pause | pause a level or a cinematic, music and sound too, until pressed again |
+| Insert | debug panel on or off (pause a level to use it with the mouse) |
 
 | In a level | |
 |------------|---|

@@ -19,20 +19,17 @@ main :: () {
     }
     // Automated runs are silent and keep their window hidden: they capture into a texture of
     // their own, so nothing needs to be on the screen or come out of the speakers.
-    automated := false;
-    #if DEV  automated = is_automated_run_requested();
+    parse_ci_test_command_line();
+    // Runs last: the CI test's result is the exit code.
+    defer if is_ci_test()  exit(get_ci_exit_code());
+    automated := is_ci_test();
+    #if DEV  if is_automated_run_requested()  automated = true;
     if automated  SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
-    if !SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_EVENTS) {
-        print("SDL_Init failed: %\n", to_string(SDL_GetError()));
-        exit(1);
-    }
+    if !SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_EVENTS)  exit_on_error(tprint("SDL_Init failed: %", to_string(SDL_GetError())));
     defer SDL_Quit();
 
     window := SDL_CreateWindow(TITLE.data, 1280, 720, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
-    if !window {
-        print("SDL_CreateWindow failed: %\n", to_string(SDL_GetError()));
-        exit(1);
-    }
+    if !window  exit_on_error(tprint("SDL_CreateWindow failed: %", to_string(SDL_GetError())));
     defer SDL_DestroyWindow(window);
 
     // Where the desktop's scale isn't applied for us (X11, Windows), the window is made that
@@ -44,29 +41,32 @@ main :: () {
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED_MASK, SDL_WINDOWPOS_CENTERED_MASK);
     }
     // A ship build starts fullscreen, as the original did.
-    #if SHIP  SDL_SetWindowFullscreen(window, true);
+    #if SHIP  if !is_ci_test()  SDL_SetWindowFullscreen(window, true);
 
     // The renderer's shaders are SPIR-V only, and on Windows SDL prefers Direct3D 12 when it's
     // offered, so ask for Vulkan first. Direct3D 12 still runs the ImGui tools without Vulkan.
     device := SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, DEV, null);
     if !device  device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXBC, DEV, null);
-    if !device {
-        print("SDL_CreateGPUDevice failed: %\n", to_string(SDL_GetError()));
-        exit(1);
-    }
+    if !device  exit_on_error(tprint("SDL_CreateGPUDevice failed: %", to_string(SDL_GetError())));
     defer SDL_DestroyGPUDevice(device);
+    add_ci_note("GPU driver", to_string(SDL_GetGPUDeviceDriver(device)));
 
-    if !SDL_ClaimWindowForGPUDevice(device, window) {
-        print("SDL_ClaimWindowForGPUDevice failed: %\n", to_string(SDL_GetError()));
-        exit(1);
-    }
+    if !SDL_ClaimWindowForGPUDevice(device, window)  exit_on_error(tprint("SDL_ClaimWindowForGPUDevice failed: %", to_string(SDL_GetError())));
     defer SDL_ReleaseWindowFromGPUDevice(device, window);
     SDL_SetGPUSwapchainParameters(device, window, .SDR, .VSYNC);
 
     im_init(window, device, SDL_GetGPUSwapchainTextureFormat(device, window));
     defer im_shutdown(device);
+    if is_ci_test() {
+        // Every window in the main one, where the capture sees it, and no saved layout.
+        io := ImGui.GetIO();
+        io.IniFilename = null;
+        io.ConfigFlags &= ~ImGuiConfigFlags.ViewportsEnable;
+    }
 
-    if !render_init(device)  print("The renderer failed to start; nothing in the game can be drawn.\n");
+    rendering := render_init(device);
+    if !rendering  print("The renderer failed to start; nothing in the game can be drawn.\n");
+    add_ci_check("renderer started", rendering);
     defer render_shutdown();
 
     // A ship build reads the data from DARK beside the executable; dev builds from the repo's
@@ -78,38 +78,60 @@ main :: () {
         dark_dir, found := find_dark_data_dir();
     }
     set_dark_data_dir(dark_dir);
+    add_ci_check("game data found", found, dark_dir);
     if !found {
         print("Game data not found in %\n", dark_dir);
-        // A ship build has nothing to show without it.
+        // A ship build has nothing to show without it, nor a CI test anything to check.
+        if is_ci_test()  exit_on_error("No game data.");
         #if SHIP {
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, TITLE.data, temp_c_string(tprint("Dark Forces data not found in %", dark_dir)), window);
             exit(1);
         }
     } else if !gob_mount_retail(dark_dir) {
         print("Couldn't mount the GOBs in %\n", dark_dir);
+        add_ci_check("GOBs mounted", false);
         gob_unmount_all();
+    } else {
+        add_ci_check("GOBs mounted", true);
     }
     defer gob_unmount_all();
 
     // The game's logic needs DARK.EXE's cosine table; music, the FM driver's from IMUSE.EXE.
-    if found && !fixed_load_tables(dark_dir)  print("Couldn't read the tables in %/DARK.EXE; levels are off.\n", dark_dir);
-    if found && !fm_load_driver(dark_dir)  print("Couldn't read the FM driver from %/IMUSE.EXE; music is off.\n", dark_dir);
+    if found {
+        ok := fixed_load_tables(dark_dir);
+        if !ok  print("Couldn't read the tables in %/DARK.EXE; levels are off.\n", dark_dir);
+        add_ci_check("DARK.EXE's tables read", ok);
+        ok = fm_load_driver(dark_dir);
+        if !ok  print("Couldn't read the FM driver from %/IMUSE.EXE; music is off.\n", dark_dir);
+        add_ci_check("IMUSE.EXE's FM driver read", ok);
+    }
 
     // The game runs without sound if audio can't start.
-    if !audio_init()  print("Audio failed to start; continuing without sound.\n");
+    audio := audio_init();
+    if !audio  print("Audio failed to start; continuing without sound.\n");
+    add_ci_check("audio started (the dummy driver)", audio);
     music_init();
     if found {
         audio_lock();
         ok := imuse_load_digital_tables(dark_dir);
         audio_unlock();
         if !ok  print("Couldn't read iMUSE's mixing tables from %/IMUSE.EXE; digital sound is off.\n", dark_dir);
+        add_ci_check("IMUSE.EXE's mixing tables read", ok);
     }
     defer audio_shutdown();
 
-    if found && !cutscene_init()  print("Couldn't read CUTSCENE.LST; cutscenes are off.\n");
+    if found {
+        ok := cutscene_init();
+        if !ok  print("Couldn't read CUTSCENE.LST; cutscenes are off.\n");
+        add_ci_check("CUTSCENE.LST read", ok);
+    }
     defer cutscene_shutdown();
     defer release_cutscene_screen();
-    if found && !menu_init(dark_dir)  print("Couldn't read HOTKEYS.MSG, MENU.LFD's font or DARK.EXE's colors; the game's menus won't work right.\n");
+    if found {
+        ok := menu_init(dark_dir);
+        if !ok  print("Couldn't read HOTKEYS.MSG, MENU.LFD's font or DARK.EXE's colors; the game's menus won't work right.\n");
+        add_ci_check("menus read", ok);
+    }
     defer menu_shutdown();
     defer release_menu_screen();
     #if DEV  defer shutdown_tools();
@@ -121,23 +143,27 @@ main :: () {
         in_tools = parse_dev_command_line();
         if is_enhanced_requested()  cutscenes.enhanced = true;
         if is_original_requested()  cutscenes.enhanced = false;
-        if is_input_ignored()  ImGui.GetIO().ConfigFlags |= .NoMouse | .NoKeyboard;
+        if is_light_only_requested()  game.draw.light_only = true;
     }
-    show_notice(ifx cutscenes.enhanced then NOTICE_START_ENHANCED else NOTICE_START_ORIGINAL, NOTICE_START_NS);
+    if is_real_input_ignored()  ImGui.GetIO().ConfigFlags |= .NoMouse | .NoKeyboard;
     // A ship build runs as the original: the opening, then the agent menu.
-    #if SHIP  start_play();
+    #if SHIP  if !is_ci_test()  start_play();
+    // Fixed-step runs (the CI test, the diff, screenshots) go as fast as they can, not held to
+    // the display.
+    fixed_run := is_ci_test();
     #if DEV {
-        // Fixed-step runs (the diff, screenshots) go as fast as they can, not held to the
-        // display.
         _, screenshot := get_screenshot_clock();
-        if is_fixed_cutscene_run() || screenshot {
-            notice.until_ns = 0;
-            mode := ifx SDL_WindowSupportsGPUPresentMode(device, window, .IMMEDIATE) then SDL_GPUPresentMode.IMMEDIATE else .MAILBOX;
-            if SDL_WindowSupportsGPUPresentMode(device, window, mode)  SDL_SetGPUSwapchainParameters(device, window, .SDR, mode);
-            // And they'd outrun the in-between fits, so they wait for them, to come out the
-            // same every time.
-            cutscene_set_waiting_for_fits(true);
-        }
+        if is_fixed_cutscene_run() || screenshot  fixed_run = true;
+    }
+    if fixed_run {
+        notice.off = true;
+        mode := ifx SDL_WindowSupportsGPUPresentMode(device, window, .IMMEDIATE) then SDL_GPUPresentMode.IMMEDIATE else .MAILBOX;
+        if SDL_WindowSupportsGPUPresentMode(device, window, mode)  SDL_SetGPUSwapchainParameters(device, window, .SDR, mode);
+        // And they'd outrun the in-between fits, so they wait for them, to come out the same
+        // every time.
+        cutscene_set_waiting_for_fits(true);
+    }
+    #if DEV {
         if is_play_requested() && !is_fixed_cutscene_run() {
             start_play(get_requested_scene());
         } else if is_play_requested() {
@@ -149,9 +175,11 @@ main :: () {
     last_frame_ns := SDL_GetTicksNS();
     running := true;
     while running {
+        profile_begin_frame();
+        events_zone := profile_open_zone("events");
         event: SDL_Event;
         while SDL_PollEvent(*event) {
-            #if DEV  if is_input_ignored() && is_device_input(*event) continue;
+            if is_real_input_ignored() && is_device_input(*event) continue;
             im_process_event(*event);
             if cast(SDL_EventType) event.type == {
                 case .QUIT;
@@ -163,7 +191,7 @@ main :: () {
                 case .WINDOW_LEAVE_FULLSCREEN;
                     fullscreen = false;
                 case .MOUSE_MOTION;
-                    if game.playing && !is_esc_menu_up() {
+                    if game.playing && !is_esc_menu_up() && !game.paused {
                         game.mouse_x += event.motion.xrel;
                         game.mouse_y += event.motion.yrel;
                     }
@@ -185,18 +213,31 @@ main :: () {
                         show_notice(ifx cutscenes.enhanced then "Enhanced Mode: On" else "Enhanced Mode: Off");
                         continue;
                     }
+                    if key.key == DEBUG_PANEL_KEY && !key.repeat {
+                        toggle_debug_panel();
+                        continue;
+                    }
                     if is_menu_shown() {
                         send_menu_key(key);
                         continue;
                     }
                     if game.playing && is_esc_menu_up()  continue;
+                    // As the original's Pause: the level stops, and every key but Pause again
+                    // is thrown away. Not the original's: the pointer is let go meanwhile.
+                    if game.playing && key.key == SDLK_PAUSE && !key.repeat {
+                        game.paused = !game.paused;
+                        set_mouse_captured(window, !game.paused);
+                        continue;
+                    }
+                    if game.playing && game.paused  continue;
+                    // The same in a cutscene, on its clock.
+                    if cutscene_is_playing() && key.key == SDLK_PAUSE && !key.repeat {
+                        set_cutscene_paused(!is_cutscene_paused());
+                        continue;
+                    }
+                    if cutscene_is_playing() && is_cutscene_paused()  continue;
                     if game.playing && !key.repeat {
-                        // In a mission Esc brings up the Esc menu; a level from the tools is
-                        // just left.
-                        if key.key == SDLK_ESCAPE {
-                            if play.active  open_esc_menu();
-                            else            stop_level(window, *in_tools);
-                        }
+                        if key.key == SDLK_ESCAPE  open_esc_menu();
                         else if key.key == SDLK_F1 { if play.active  open_pda(); }
                         // The goggles, cleats, mask and headlamp.
                         else if key.key == SDLK_F2  world_toggle_goggles();
@@ -221,11 +262,13 @@ main :: () {
                     else if key.key == SDLK_SPACE  cutscene_next();
                 case .MOUSE_BUTTON_DOWN;
                     // Not a click on a window over the cutscene (the cutscene tool's).
-                    if !cutscene_is_playing() || ImGui.GetIO().WantCaptureMouse continue;
+                    if !cutscene_is_playing() || is_cutscene_paused() || ImGui.GetIO().WantCaptureMouse continue;
                     if event.button.button == SDL_BUTTON_RIGHT       cutscene_skip();
                     else if event.button.button == SDL_BUTTON_LEFT   cutscene_next();
             }
         }
+
+        profile_close_zone(events_zone);
 
         im_new_frame();
         action := Menu_Action.NONE;
@@ -233,9 +276,11 @@ main :: () {
             advance_cutscene_tool_clock(get_base_clock());
             send_dev_clicks();
         }
+        begin_ci_frame(window, *cutscenes);
         now_ns := SDL_GetTicksNS();
         dt := (now_ns - last_frame_ns) / 1_000_000_000.0;
         last_frame_ns = now_ns;
+        if is_ci_test()  dt = 1.0 / 60;
         #if DEV {
             _, fixed := get_screenshot_clock();
             if fixed  dt = 1.0 / 60;
@@ -246,7 +291,7 @@ main :: () {
         update_play(window, *in_tools, *running);
         // A ship build has no main menu: when the run ends (the agent menu's Exit), so does
         // the program.
-        #if SHIP  if !play.active  running = false;
+        #if SHIP  if !play.active && !is_ci_test()  running = false;
 
         // The desktop's cursor only on the ImGui screens: the game draws its own.
         os_cursor := false;
@@ -254,18 +299,24 @@ main :: () {
         if game.playing && is_esc_menu_up() {
             show_esc_level();
         } else if game.playing {
-            update_level(cast(float) dt);
+            if !game.paused {
+                profile_zone("level update");
+                update_level(cast(float) dt);
+            }
             // Dead with no lives left: the level is over, and in a mission back to its
             // briefing. A mission complete waits for Esc.
             if world_has_failed() {
                 if play.active  on_level_failed(window, *in_tools);
                 else            stop_level(window, *in_tools);
             } else {
+                profile_zone("level draw");
                 show_level(game.draw);
             }
         } else if play.screen == .BRIEFING || play.screen == .AGENT_MENU {
+            profile_zone("menu");
             show_menu_screen(menu_get_palette());
-        } else if cutscene_is_playing() && cutscene_update(get_clock()) {
+        } else if cutscene_is_playing() && update_cutscene() {
+            profile_zone("cutscene draw");
             show_cutscene(cutscenes);
             #if DEV {
                 show_cutscene_tool_controls(*cutscenes);
@@ -280,9 +331,18 @@ main :: () {
                 else         action = show_main_menu(*fullscreen, *cutscenes);
             }
         }
-        show_os_cursor(os_cursor);
+        {
+            profile_zone("debug panel");
+            show_debug_panel();
+        }
+        show_os_cursor(os_cursor || is_debug_panel_using_mouse() || is_anything_paused());
+        hold_audio_while_paused();
+        update_start_notice(cutscenes.enhanced);
         draw_notice();
-        ImGui.Render();
+        {
+            profile_zone("imgui");
+            ImGui.Render();
+        }
         draw_data := ImGui.GetDrawData();
 
         if action == {
@@ -303,12 +363,19 @@ main :: () {
         cmd := SDL_AcquireGPUCommandBuffer(device);
 
         // Offscreen views first: their copy and render passes can't go inside ImGui's pass.
-        render_submit(cmd);
+        {
+            profile_zone("render submit");
+            render_submit(cmd);
+        }
 
         tex: *SDL_GPUTexture;
-        if !SDL_WaitAndAcquireGPUSwapchainTexture(cmd, window, *tex, null, null) {
-            print("SDL_WaitAndAcquireGPUSwapchainTexture failed: %\n", to_string(SDL_GetError()));
+        {
+            profile_zone("swapchain wait");
+            if !SDL_WaitAndAcquireGPUSwapchainTexture(cmd, window, *tex, null, null) {
+                print("SDL_WaitAndAcquireGPUSwapchainTexture failed: %\n", to_string(SDL_GetError()));
+            }
         }
+        present_zone := profile_open_zone("present");
 
         minimized := draw_data.DisplaySize.x <= 0.0 || draw_data.DisplaySize.y <= 0.0;
         if tex != null && !minimized {
@@ -323,16 +390,20 @@ main :: () {
             pass := SDL_BeginGPURenderPass(cmd, *target, 1, null);
             im_render(draw_data, cmd, pass);
             SDL_EndGPURenderPass(pass);
+            capture_ci_frame(device, cmd, draw_data, SDL_GetGPUSwapchainTextureFormat(device, window));
             #if DEV  capture_dev_screenshot(device, cmd, draw_data, SDL_GetGPUSwapchainTextureFormat(device, window));
         } else if automated && !minimized {
             // A hidden window has no swapchain texture: the capture draws the frame alone.
             im_prepare(draw_data, cmd);
+            capture_ci_frame(device, cmd, draw_data, SDL_GetGPUSwapchainTextureFormat(device, window));
             #if DEV  capture_dev_screenshot(device, cmd, draw_data, SDL_GetGPUSwapchainTextureFormat(device, window));
         }
 
         im_render_viewports();
 
         SDL_SubmitGPUCommandBuffer(cmd);
+        profile_close_zone(present_zone);
+        if !end_ci_frame(device)  running = false;
         #if DEV {
             if finish_dev_screenshot(device)  running = false;
             if !check_fixed_cutscene_run()  running = false;
@@ -352,9 +423,9 @@ show_os_cursor :: (shown: bool) {
     }
 }
 
-// At start, the version, the state as F12 shows it, then the keys.
-NOTICE_START_ENHANCED :: #run tprint("% %\nEnhanced Mode: On\nF11 - Toggle Fullscreen\nF12 - Toggle Enhanced", GAME_NAME, VERSION);
-NOTICE_START_ORIGINAL :: #run tprint("% %\nEnhanced Mode: Off\nF11 - Toggle Fullscreen\nF12 - Toggle Enhanced", GAME_NAME, VERSION);
+// While the opening plays, the version, the state as F12 shows it, then jaidi's own keys.
+NOTICE_START_ENHANCED :: #run tprint("% %\nEnhanced Mode: On\nF11 - Toggle Fullscreen\nF12 - Toggle Enhanced\nInsert - Debug Panel", GAME_NAME, VERSION);
+NOTICE_START_ORIGINAL :: #run tprint("% %\nEnhanced Mode: Off\nF11 - Toggle Fullscreen\nF12 - Toggle Enhanced\nInsert - Debug Panel", GAME_NAME, VERSION);
 NOTICE_START_NS :: 15_000_000_000;
 NOTICE_NS       :: 3_000_000_000;
 NOTICE_SCALE    :: 1.5;
@@ -362,7 +433,20 @@ NOTICE_SCALE    :: 1.5;
 notice: struct {
     text:     string;
     until_ns: u64;
+    opening:  bool;             // The start notice is up for the opening playing.
+    off:      bool;             // None at all: automated runs.
 };
+
+// The start notice from when the opening starts until it's skipped or done.
+update_start_notice :: (enhanced: bool) {
+    playing := is_opening_playing();
+    if playing && !notice.opening {
+        show_notice(ifx enhanced then NOTICE_START_ENHANCED else NOTICE_START_ORIGINAL, NOTICE_START_NS);
+    } else if !playing && notice.opening {
+        notice.until_ns = 0;
+    }
+    notice.opening = playing;
+}
 
 // Text in the upper left over whatever is shown, for a few seconds.
 show_notice :: (text: string, duration_ns: u64 = NOTICE_NS) {
@@ -371,7 +455,7 @@ show_notice :: (text: string, duration_ns: u64 = NOTICE_NS) {
 }
 
 draw_notice :: () {
-    if SDL_GetTicksNS() >= notice.until_ns return;
+    if notice.off || SDL_GetTicksNS() >= notice.until_ns return;
     viewport := ImGui.GetMainViewport();
     draw_list := ImGui.GetForegroundDrawList(viewport);
     // From the base size, not GetFontSize(), so the display scale isn't applied twice.
@@ -392,17 +476,19 @@ Menu_Action :: enum {
     PLAY;
 }
 
-// Nanoseconds. While the cutscene tool plays one, the tool's clock, which stops when paused.
+// Nanoseconds. While the cutscene tool plays one, the tool's clock, which stops when paused;
+// otherwise the debug panel's, which runs with the base clock unless paused or moved.
 get_clock :: () -> u64 {
     #if DEV {
         time, driving := get_cutscene_tool_clock();
         if driving return time;
     }
-    return get_base_clock();
+    return get_debug_panel_clock(get_base_clock());
 }
 
-// Under --cutscene-diff or --screenshot a fixed step per frame instead of the time.
+// Under --ci-test, --cutscene-diff or --screenshot a fixed step per frame instead of the time.
 get_base_clock :: () -> u64 {
+    if is_ci_test()  return get_ci_clock();
     #if DEV {
         if is_fixed_cutscene_run()  return get_fixed_run_clock();
         time, fixed := get_screenshot_clock();
@@ -517,6 +603,7 @@ show_cutscene :: (settings: Cutscene_Settings) {
         draw_list.AddCallback(draw_list, platform.DrawCallback_SetSamplerNearest);
         draw_list.AddImage(draw_list, .{_TexID = cast(ImTextureID) screen}, p0, p1);
         draw_list.AddCallback(draw_list, platform.DrawCallback_SetSamplerLinear);
+        if is_cutscene_paused()  draw_paused_box(draw_list, viewport);
     }
     ImGui.End();
     ImGui.PopStyleColor();
@@ -532,6 +619,8 @@ get_shown_size :: (size: ImVec2, pixels: ImVec2, aspect: float) -> s32, s32 {
 // A level being played: the world, the input that moves it and how it's drawn.
 game: struct {
     playing: bool;
+    paused: bool;                   // The Pause key.
+    audio_paused: bool;             // Music and sounds held, in a level or a cutscene.
     from_tools: bool;               // Esc goes back to the tools rather than the menu.
     mouse_x, mouse_y: float;
     draw: World_Draw_Options;
@@ -548,6 +637,7 @@ start_level :: (window: *SDL_Window, name: string, from_tools: bool, difficulty 
     // The level's stalk music, by its place in JEDI.LVL.
     for world_get_level_list()  if it.name == world_get_name()  music_start_level(it_index + 1);
     game.playing = true;
+    game.paused = false;
     game.from_tools = from_tools;
     game.mouse_x, game.mouse_y = 0, 0;
     set_mouse_captured(window, true);
@@ -555,9 +645,12 @@ start_level :: (window: *SDL_Window, name: string, from_tools: bool, difficulty 
 }
 
 stop_level :: (window: *SDL_Window, in_tools: *bool) {
+    // From the tools, the next level starts with the weapon in hand, as after a mission.
+    if game.from_tools  world_keep_weapon();
     world_unload();
     music_stop();
     game.playing = false;
+    game.paused = false;
     in_tools.* = game.from_tools;
     set_mouse_captured(window, false);
 }
@@ -565,16 +658,46 @@ stop_level :: (window: *SDL_Window, in_tools: *bool) {
 // The level takes the mouse's motion while it runs; not in automated runs, which leave the
 // pointer alone.
 set_mouse_captured :: (window: *SDL_Window, captured: bool) {
-    #if DEV  if is_input_ignored() return;
+    if is_real_input_ignored() return;
     SDL_SetWindowRelativeMouseMode(window, captured);
+}
+
+// Automated runs (the CI test, the dev screenshots, the diff) take no input from the real
+// keyboard and mouse, so whoever is at the machine can't change what they capture.
+is_real_input_ignored :: () -> bool {
+    #if DEV  if is_input_ignored() return true;
+    return is_ci_test();
+}
+
+// Input from the keyboard and mouse rather than pushed by an automated run, which pushes its
+// keys with no window.
+is_device_input :: (event: *SDL_Event) -> bool {
+    if cast(SDL_EventType) event.type == {
+        case .KEY_DOWN; #through;
+        case .KEY_UP;        return event.key.windowID != 0;
+        case .TEXT_INPUT;    return event.text.windowID != 0;
+        case .TEXT_EDITING;  return event.edit.windowID != 0;
+        case .MOUSE_MOTION; #through;
+        case .MOUSE_BUTTON_DOWN; #through;
+        case .MOUSE_BUTTON_UP; #through;
+        case .MOUSE_WHEEL;   return true;
+    }
+    return false;
+}
+
+// Before the program is far enough along to run: says why, in the CI test's report too, and
+// quits.
+exit_on_error :: (message: string) {
+    print("%\n", message);
+    add_ci_check("started", false, message);
+    write_ci_report();
+    exit(1);
 }
 
 update_level :: (dt: float) {
     keys := SDL_GetKeyboardState(null);
-    #if DEV {
-        none: [SDL_Scancode.COUNT] bool;
-        if is_input_ignored()  keys = none.data;
-    }
+    none: [SDL_Scancode.COUNT] bool;
+    if is_real_input_ignored()  keys = none.data;
     input: World_Input;
     // As in the original, the strafe key makes the turn keys strafe.
     strafing := keys[SDL_Scancode.LALT] || keys[SDL_Scancode.RALT];
@@ -604,7 +727,7 @@ update_level :: (dt: float) {
     // The original's fire keys are Ctrl and Z, with the mouse's first and third buttons; its
     // second is use.
     buttons := cast(u32) SDL_GetMouseState(null, null);
-    #if DEV  if is_input_ignored()  buttons = 0;
+    if is_real_input_ignored()  buttons = 0;
     input.fire       = keys[SDL_Scancode.LCTRL] || keys[SDL_Scancode.RCTRL] || (buttons & (1 << (SDL_BUTTON_LEFT - 1))) != 0;
     input.fire_secondary = keys[SDL_Scancode.Z] || (buttons & (1 << (SDL_BUTTON_MIDDLE - 1))) != 0;
     for 0..9  input.weapon_keys[it] = keys[cast(SDL_Scancode) (cast(s32) SDL_Scancode._1 + it)];
@@ -612,18 +735,28 @@ update_level :: (dt: float) {
     input.use        = keys[SDL_Scancode.E] || keys[SDL_Scancode.RETURN] || (buttons & (1 << (SDL_BUTTON_RIGHT - 1))) != 0;
     input.mouse_x, input.mouse_y = game.mouse_x, game.mouse_y;
     game.mouse_x, game.mouse_y = 0, 0;
-    fixed_step := false;
+    apply_ci_level_input(*input);
+    fixed_step := is_ci_test();
     #if DEV {
         apply_dev_level_input(*input);
-        fixed_step = is_fixed_clock();
+        if is_fixed_clock()  fixed_step = true;
     }
-    world_update(dt, input, fixed_step);
+    {
+        profile_zone("world update");
+        world_update(dt, input, fixed_step);
+    }
     // The enemies' alerts start and keep up the fight music; it runs out on its own.
     for world_take_music_events() {
         if it.kind == .FIGHT  music_start_fight(it.tick);
         else                  music_sustain_fight(it.tick);
     }
     music_update(world_get_tick());
+}
+
+// cutscene_update, timed.
+update_cutscene :: () -> bool {
+    profile_zone("cutscene update");
+    return cutscene_update(get_clock());
 }
 
 // The level's view over the whole window: the original's 320x200 at 4:3, or at the window's
@@ -635,7 +768,11 @@ show_level :: (options: World_Draw_Options) {
     width, height: s32;
     if options.original  width, height = get_shown_size(size, pixels, 4.0 / 3.0);
     else width, height = cast(s32) (size.x * pixels.x), cast(s32) (size.y * pixels.y);
-    texture := world_draw(width, height, options);
+    texture: *SDL_GPUTexture;
+    {
+        profile_zone("world draw");
+        texture = world_draw(width, height, options);
+    }
     if !texture return;
 
     left := cast(s32) ((size.x * pixels.x - width) / 2);
@@ -656,7 +793,8 @@ show_level :: (options: World_Draw_Options) {
         draw_list.AddCallback(draw_list, platform.DrawCallback_SetSamplerNearest);
         draw_list.AddImage(draw_list, .{_TexID = cast(ImTextureID) texture}, p0, p1);
         draw_list.AddCallback(draw_list, platform.DrawCallback_SetSamplerLinear);
-        #if DEV  if !is_status_hidden() {
+        if game.paused  draw_paused_box(draw_list, viewport);
+        #if DEV  if !is_status_hidden() && !is_ci_test() {
             // The frame rate averaged, and shown twice a second, so it can be read.
             now := SDL_GetTicksNS();
             if now - game.rate_shown_at > 500_000_000 {
@@ -664,8 +802,8 @@ show_level :: (options: World_Draw_Options) {
                 game.rate_shown_at = now;
             }
             player := world_get_player();
-            text := tprint("% (sector %)  % fps  Esc: %, F5: headlight, F12: %", world_get_name(), player.sector,
-                           formatFloat(game.rate_shown, trailing_width = 0), ifx play.active then "menu" else "leave",
+            text := tprint("% (sector %)  % fps  Esc: menu, F5: headlight, F12: %", world_get_name(), player.sector,
+                           formatFloat(game.rate_shown, trailing_width = 0),
                            ifx game.draw.original then "Enhanced" else "Original");
             draw_list.AddText(draw_list, ImVec2.{viewport.Pos.x + 8, viewport.Pos.y + 6}, 0xFFFFFFFF, text);
         }
@@ -673,6 +811,40 @@ show_level :: (options: World_Draw_Options) {
     ImGui.End();
     ImGui.PopStyleColor();
     ImGui.PopStyleVar(2);
+}
+
+// A level or a cutscene paused, by the Pause key or the debug panel's controls.
+is_anything_paused :: () -> bool {
+    if game.playing return game.paused;
+    return cutscene_is_playing() && is_cutscene_paused();
+}
+
+// Not the original's, which lets them play on: music and sounds stop while paused. And a
+// cutscene's pause doesn't outlive it.
+hold_audio_while_paused :: () {
+    if !game.playing && !cutscene_is_playing() && is_cutscene_paused()  set_cutscene_paused(false);
+    paused := is_anything_paused();
+    if paused != game.audio_paused {
+        audio_pause(paused);
+        game.audio_paused = paused;
+    }
+}
+
+// Not the original's, which shows nothing while paused: [PAUSED] in the middle, in a frame,
+// large for the window.
+draw_paused_box :: (draw_list: *ImDrawList, viewport: *ImGuiViewport) {
+    TEXT :: "[PAUSED]";
+    ImGui.PushFont(null, max(viewport.Size.y * 0.08, ImGui.GetStyle().FontSizeBase * 3));
+    defer ImGui.PopFont();
+    size := ImGui.CalcTextSize(TEXT);
+    pad := ImVec2.{size.y * 0.6, size.y * 0.35};
+    center := ImVec2.{viewport.Pos.x + viewport.Size.x / 2, viewport.Pos.y + viewport.Size.y / 2};
+    p0 := ImVec2.{center.x - size.x / 2 - pad.x, center.y - size.y / 2 - pad.y};
+    p1 := ImVec2.{center.x + size.x / 2 + pad.x, center.y + size.y / 2 + pad.y};
+    rounding := size.y * 0.15;
+    draw_list.AddRectFilled(draw_list, p0, p1, 0xC0000000, rounding);
+    draw_list.AddRect(draw_list, p0, p1, 0xFFFFFFFF, rounding, thickness = max(size.y * 0.05, 1));
+    draw_list.AddText(draw_list, ImVec2.{center.x - size.x / 2, center.y - size.y / 2}, 0xFFFFFFFF, TEXT);
 }
 
 cutscene_screen: struct {
@@ -709,4 +881,8 @@ release_cutscene_screen :: () {
 #if OS == .LINUX  Posix :: #import "POSIX";
 
 #load "mission.jai";
+#load "debug_panel.jai";
+#load "profile.jai";
+#load "capture.jai";
+#load "ci_test.jai";
 #if DEV #load "tools/tools.jai";

@@ -27,7 +27,8 @@ world_draw :: (width: s32, height: s32, options: World_Draw_Options) -> *SDL_GPU
     w, h := width, height;
     if options.original { w, h = 320, 200; }
     w, h = max(w, 1), max(h, 1);
-    render_size_view(*world.view, w, h, world = true);
+    // Enhanced lights in color (dfRender's RGB views); Original through the colormap.
+    render_size_view(*world.view, w, h, world = true, rgb = !options.original);
 
     eye, sector, yaw, pitch := world_get_camera();
     c: Camera;
@@ -51,7 +52,7 @@ world_draw :: (width: s32, height: s32, options: World_Draw_Options) -> *SDL_GPU
     world_count_view_frame();
     palette := world_get_palette();
     if options.palette  palette = options.palette.*;
-    render_begin_view(*world.view, *palette, *world.gpu_colormap, projection);
+    render_begin_view(*world.view, *palette, *world.gpu_colormap, projection, light_only = options.light_only);
 
     // The sky's place for the view's yaw and pitch, the same for every sky in the level.
     c.sky.center_x  = c.width * 0.5 + 0.5 + c.width / 320.0;    // The original's table is
@@ -72,7 +73,13 @@ world_draw :: (width: s32, height: s32, options: World_Draw_Options) -> *SDL_GPU
     window.points[2] = .{c.width, c.height};
     window.points[3] = .{0, c.height};
     clear_drawn_objects();
+    c.on_paths.allocator = temp;
     draw_sector(*c, sector, 0, window, 0);
+    // Objects on VUE paths (Kyle's ship, the flybys) last, against the whole view's depth
+    // rather than in their sector's window: they fly over the level, out past any one
+    // sector's opening.
+    render_set_world_draw(.GEOMETRY, 0);
+    for c.on_paths  draw_object(*c, it.object, it.sector);
 
     // The HUD over it, in the original's 320x200, or in the 4:3 part of a wider view; the
     // panels and the message at the view's edges either way.
@@ -99,7 +106,7 @@ world_draw :: (width: s32, height: s32, options: World_Draw_Options) -> *SDL_GPU
 NEAR :: 0.05;
 MAX_DEPTH :: 40;            // How deep the walk goes, as the original's.
 MAX_VISITS :: 4096;         // Sectors drawn in a frame, against a walk gone wild.
-PLANE_SIZE :: 4096.0;       // Half the width of the planes drawn for floors and ceilings.
+PLANE_REACH :: 4096.0;      // How far off floors and ceilings are drawn, in view depth.
 
 Camera :: struct {
     eye: Vector3;
@@ -110,9 +117,12 @@ Camera :: struct {
     sky: Sky;
     sky_yaw, sky_pitch: float;
     light: s32;                 // The player's: the headlamp, the weapon's and the level's.
-    smooth: bool;               // Enhanced: objects on paths drawn between their frames.
+    smooth: bool;               // Enhanced: objects on paths drawn between their frames,
+                                // sprites lit at fractional levels.
     visits: int;
     path: [MAX_DEPTH] struct { sector, wall: s32; };    // The openings being looked through.
+    on_paths: [..] struct { object, sector: s32; };     // Objects on VUE paths in the sectors
+                                                        // drawn, drawn last.
 }
 
 // A convex part of the screen, in pixels.
@@ -193,19 +203,35 @@ draw_piece :: (c: *Camera, piece: Piece, texture: Wall_Texture, flip: bool, tran
 }
 
 // The sky texture over a wall piece: placed by direction, not by the wall.
-draw_sky_piece :: (c: *Camera, piece: Piece, flat: Flat) {
+draw_sky_piece :: (c: *Camera, piece: Piece, flat: Flat, level: s32) {
     image, _ := get_texture(flat.texture);
     if !image return;
     if piece.bottom <= piece.top return;
     set_sky(c, flat);
     render_set_image(image);
     color := render_pack_color(.SKY);
+    render_set_world_draw(.SKY, xx level);
     add_quad(.[
         vertex(c, .{piece.a.x, piece.top, piece.a.y},    .{}, 0, color),
         vertex(c, .{piece.b.x, piece.top, piece.b.y},    .{}, 0, color),
         vertex(c, .{piece.b.x, piece.bottom, piece.b.y}, .{}, 0, color),
         vertex(c, .{piece.a.x, piece.bottom, piece.a.y}, .{}, 0, color),
     ]);
+    render_set_world_draw(.GEOMETRY, xx level);
+}
+
+// Wall pieces in the stencil alone, no color or depth.
+draw_stencil_pieces :: (c: *Camera, pieces: [] Piece, kind: World_Draw, stencil: s32) {
+    render_set_image(null);
+    render_set_world_draw(kind, xx stencil);
+    for pieces {
+        add_quad(.[
+            vertex(c, .{it.a.x, it.top, it.a.y},    .{}, 0, 0),
+            vertex(c, .{it.b.x, it.top, it.b.y},    .{}, 0, 0),
+            vertex(c, .{it.b.x, it.bottom, it.b.y}, .{}, 0, 0),
+            vertex(c, .{it.a.x, it.bottom, it.a.y}, .{}, 0, 0),
+        ]);
+    }
 }
 
 set_sky :: (c: *Camera, flat: Flat) {
@@ -252,32 +278,83 @@ draw_sign :: (c: *Camera, piece: Piece, part: Wall_Texture, sign: Wall_Texture, 
     ]);
 }
 
-// A floor or ceiling as a plane around the camera, textured in world x/z the original's way
-// (8 texels a unit, u against x), or as sky.
-draw_flat :: (c: *Camera, flat: Flat, sky: bool) {
+// The sky over the whole view, far off; the stencil keeps it to the window.
+draw_sky_window :: (c: *Camera, flat: Flat, level: s32) {
     image, _ := get_texture(flat.texture);
     if !image return;
+    set_sky(c, flat);
     render_set_image(image);
-    y := to_float(flat.altitude);
+    color := render_pack_color(.SKY);
+    z :: SKY_REACH;
+    SCREEN :: Vector2.[.{0, 0}, .{1, 0}, .{1, 1}, .{0, 1}];
     corners: [4] Render_Vertex;
-    OFFSETS :: Vector2.[.{-1, -1}, .{1, -1}, .{1, 1}, .{-1, 1}];
+    for SCREEN  corners[it_index] = .{unproject(c, .{it.x * c.width, it.y * c.height}, z), .{}, 0, z, color};
+    render_set_world_draw(.SKY, xx level);
+    add_quad(corners);
+    render_set_world_draw(.GEOMETRY, xx level);
+}
+
+// A floor or ceiling, textured in world x/z the original's way (8 texels a unit, u against
+// x), or as sky: the plane where the window shows it, the window's corners cast onto it. The
+// stencil cuts it to the sector's pixels within that; drawing the whole plane would have the
+// GPU test most of the screen for every sector.
+draw_flat :: (c: *Camera, flat: Flat, sky: bool, level: s32, window: Window) {
+    image, _ := get_texture(flat.texture);
+    if !image return;
+    y := to_float(flat.altitude);
+    h := y - c.eye.y;           // The plane's height in view space, y down.
+    if h == 0 return;
+
+    // The rows that see the plane, out to PLANE_REACH: a ray through row r is (x, (r - center
+    // - shear) / (focal * aspect), 1) in view space, and meets the plane at depth h / that y.
+    horizon := c.height * 0.5 + c.shear;
+    limit := horizon + h / PLANE_REACH * c.focal * c.aspect;
+    seen := clip_rows(window, limit, h > 0);
+    if seen.count < 3 return;
+
+    color: u32;
     if sky {
         set_sky(c, flat);
-        color := render_pack_color(.SKY);
-        for OFFSETS {
-            p := Vector3.{c.eye.x + it.x * PLANE_SIZE, y, c.eye.z + it.y * PLANE_SIZE};
-            corners[it_index] = vertex(c, p, .{}, 0, color);
-        }
+        color = render_pack_color(.SKY);
     } else {
-        color := render_pack_color(.TEXTURE_DEPTH) | FLAT_ADDRESSING;
-        for OFFSETS {
-            p := Vector3.{c.eye.x + it.x * PLANE_SIZE, y, c.eye.z + it.y * PLANE_SIZE};
-            uv := Vector2.{(to_float(flat.offset.x) - p.x) * 8, (p.z - to_float(flat.offset.z)) * 8};
-            corners[it_index] = vertex(c, p, uv, 0, color);
+        color = render_pack_color(.TEXTURE_DEPTH) | FLAT_ADDRESSING;
+    }
+    corners: [33] Render_Vertex;
+    for 0..seen.count-1 {
+        ray := unproject(c, seen.points[it], 1);
+        v := ray * (h / ray.y);
+        // Back from view space to the world.
+        p := Vector3.{c.eye.x + v.x * c.cos + v.z * c.sin, y, c.eye.z - v.x * c.sin + v.z * c.cos};
+        uv: Vector2;
+        if !sky  uv = .{(to_float(flat.offset.x) - p.x) * 8, (p.z - to_float(flat.offset.z)) * 8};
+        corners[it] = vertex(c, p, uv, 0, color);
+    }
+    render_set_image(image);
+    render_set_world_draw(ifx sky then World_Draw.FLAT_SKY else .FLAT, xx level);
+    for 1..seen.count-2  render_add_triangles(.[corners[0], corners[it], corners[it + 1]]);
+    render_set_world_draw(.GEOMETRY, xx level);
+}
+
+// Keeps the part of poly below row y (above it when not below).
+clip_rows :: (poly: Window, y: float, below: bool) -> Window {
+    result: Window;
+    sign := ifx below then 1.0 else -1.0;
+    for i: 0..poly.count-1 {
+        a, b := poly.points[i], poly.points[(i + 1) % poly.count];
+        da := (a.y - y) * sign;
+        db := (b.y - y) * sign;
+        if da >= 0 && result.count < result.points.count { result.points[result.count] = a; result.count += 1; }
+        if (da >= 0) != (db >= 0) && result.count < result.points.count {
+            t := da / (da - db);
+            result.points[result.count] = a + (b - a) * t;
+            result.count += 1;
         }
     }
-    add_quad(corners);
+    return result;
 }
+
+// Far enough above or below the eye to pass the top or bottom of any view.
+SKY_REACH :: 10000.0;
 
 FLAT_ADDRESSING :: 0x2000;     // scene.frag.hlsl's FLAT_BIT.
 
@@ -298,20 +375,38 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
     pit := (sector.flags[0] & SECTOR_PIT) != 0;
     render_set_world_draw(.GEOMETRY, xx level);
 
+    // A sky ceiling is behind all of the sector (0x8d0e8): whatever its walls, floor and
+    // openings leave shows sky, wherever the eye is, even above the ceiling's height.
+    if exterior {
+        render_set_lighting(get_lighting(c, sector));
+        draw_sky_window(c, sector.ceiling, level);
+    }
+
     // The columns the window spans: walls outside them can't be seen through it, as the
     // original clips walls to its window's columns.
     left, right := FLOAT32_MAX, -FLOAT32_MAX;
     for 0..window.count-1 { left = min(left, window.points[it].x); right = max(right, window.points[it].x); }
 
+    above_walls: [..] Piece;
+    above_walls.allocator = temp;
+
     for * wall: sector.walls {
         a, b := to_vector(sector.vertices[wall.left]), to_vector(sector.vertices[wall.right]);
-        if !is_facing(c, a, b) || !is_in_columns(c, a, b, left, right) || is_nearer(c, a, b, min_z) continue;
+        if !is_facing(c, a, b) || !is_in_columns(c, a, b, left, right) || is_nearer(c, a, b, min_z) || is_before_opening(c, level, a, b) continue;
         render_set_lighting(get_lighting(c, sector, wall.light));
         piece := Piece.{a = a, b = b, length = length(b - a)};
         if piece.length <= 0 continue;
         flip := (wall.flags[0] & WALL_FLIP) != 0;
         illuminated := (wall.flags[0] & WALL_ILLUMINATED_SIGN) != 0;
         switch_state := ifx wall.sign.texture >= 0 then get_switch_frame(sector_index, xx (wall - sector.walls.data)) else 0;
+        // Under a sky the eye can rise above the walls; past their tops there is only sky,
+        // and the floor's plane mustn't show there (the original draws a floor only below
+        // the walls in each column).
+        if exterior && (wall.adjoin < 0 || !(world.level.sectors[wall.adjoin].flags[0] & SECTOR_EXTERIOR_ADJ)) {
+            above := piece;
+            above.top, above.bottom = c.eye.y - SKY_REACH, to_float(sector.ceiling.altitude);
+            if above.top < above.bottom  array_add(*above_walls, above);
+        }
         if wall.adjoin < 0 {
             piece.top, piece.bottom = to_float(sector.ceiling.altitude), to_float(sector.floor.altitude);
             draw_piece(c, piece, wall.mid, flip, false);
@@ -325,7 +420,7 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
             top := piece;
             top.top, top.bottom = to_float(sector.ceiling.altitude), to_float(next.ceiling.altitude);
             if exterior && (next.flags[0] & SECTOR_EXTERIOR_ADJ) {
-                draw_sky_piece(c, top, sector.ceiling);
+                draw_sky_piece(c, top, sector.ceiling, level);
             } else {
                 draw_piece(c, top, wall.top, flip, false);
                 if wall.sign.texture >= 0 && !has_bottom  draw_sign(c, top, wall.top, wall.sign, illuminated, switch_state);
@@ -335,7 +430,7 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
             bottom := piece;
             bottom.top, bottom.bottom = to_float(next.floor.altitude), to_float(sector.floor.altitude);
             if pit && (next.flags[0] & SECTOR_PIT_ADJ) {
-                draw_sky_piece(c, bottom, sector.floor);
+                draw_sky_piece(c, bottom, sector.floor, level);
             } else {
                 draw_piece(c, bottom, wall.bottom, flip, false);
                 if wall.sign.texture >= 0  draw_sign(c, bottom, wall.bottom, wall.sign, illuminated, switch_state);
@@ -343,10 +438,9 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
         }
     }
 
-    // A plane is seen only from its side.
-    render_set_lighting(get_lighting(c, sector));
-    if c.eye.y > to_float(sector.ceiling.altitude)  draw_flat(c, sector.ceiling, exterior);
-    if c.eye.y < to_float(sector.floor.altitude)    draw_flat(c, sector.floor, pit);
+    // Before the openings: their marks are depth tested, so what stands in front of one keeps
+    // it covered.
+    draw_objects(c, sector_index, level);
 
     for * wall, wall_index: sector.walls {
         if wall.adjoin < 0 continue;
@@ -356,17 +450,24 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
         for 0..level-1  if c.path[it].sector == sector_index && c.path[it].wall == wall_index  on_path = true;
         if on_path continue;
         a, b := to_vector(sector.vertices[wall.left]), to_vector(sector.vertices[wall.right]);
-        if !is_facing(c, a, b) || c.visits >= MAX_VISITS || level + 1 >= MAX_DEPTH continue;
+        if !is_facing(c, a, b) || c.visits >= MAX_VISITS || level + 1 >= MAX_DEPTH || is_before_opening(c, level, a, b) continue;
         next := *world.level.sectors[wall.adjoin];
         top := to_float(max(sector.ceiling.altitude, next.ceiling.altitude));
         bottom := to_float(min(sector.floor.altitude, next.floor.altitude));
         if bottom <= top continue;
+        // Sky to sky, or pit to pit, the opening reaches as far as the window it's seen
+        // through (0x56500), so what flies above the next sector's ceiling still shows.
+        if exterior && (next.flags[0] & SECTOR_EXTERIOR_ADJ)  top = c.eye.y - SKY_REACH;
+        if pit && (next.flags[0] & SECTOR_PIT_ADJ)            bottom = c.eye.y + SKY_REACH;
         quad := Vector3.[.{a.x, top, a.y}, .{b.x, top, b.y}, .{b.x, bottom, b.y}, .{a.x, bottom, a.y}];
         // With the camera in the opening, both its ends can be nearer than the near plane,
-        // and the tests by columns and depth would wrongly drop it.
-        if !is_in_opening(c, quad) && (!is_in_columns(c, a, b, left, right) || is_nearer(c, a, b, min_z)) continue;
+        // and the tests by columns and depth would wrongly drop it. Only where the window
+        // reaches the camera too: a sector seen again farther off (around a sliver of a
+        // sector it wraps) has this opening on the near side of that window.
+        in_opening := min_z < NEAR * 2 && is_in_opening(c, quad);
+        if !in_opening && (!is_in_columns(c, a, b, left, right) || is_nearer(c, a, b, min_z)) continue;
 
-        inner, visible, close := get_portal_window(c, quad, window);
+        inner, visible, close := get_portal_window(c, quad, window, in_opening);
         if !visible continue;
 
         // The opening's polygon, or when the camera is in its plane (and would see it
@@ -387,11 +488,11 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
         next_min_z := min(to_view(c, quad[0]).z, to_view(c, quad[1]).z);
         render_set_world_draw(.PORTAL_MARK, xx level);
         render_add_triangles(opening);
-        render_set_world_draw(.PORTAL_CLEAR, xx (level + 1));
+        render_set_world_draw(.PORTAL_UNDRAWN, xx (level + 1));
         render_add_triangles(opening);
         c.path[level] = .{sector_index, xx wall_index};
         draw_sector(c, wall.adjoin, level + 1, inner, next_min_z);
-        render_set_world_draw(.PORTAL_RESTORE, xx (level + 1));
+        render_set_world_draw(.PORTAL_RESTORE, xx (level | STENCIL_DRAWN));
         render_add_triangles(opening);
         render_set_world_draw(.GEOMETRY, xx level);
 
@@ -402,13 +503,46 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
         }
     }
 
-    draw_objects(c, sector_index, level);
+    // The floor and ceiling last, outside the openings: they're planes around the camera, and
+    // past an opening they'd stand in front of a lower floor or higher ceiling beyond it. A
+    // plane is seen only from its side.
+    if above_walls  draw_stencil_pieces(c, above_walls, .WALL_MARK, level | STENCIL_ABOVE_WALL);
+    render_set_lighting(get_lighting(c, sector));
+    if !exterior && c.eye.y > to_float(sector.ceiling.altitude)  draw_flat(c, sector.ceiling, false, level, window);
+    if c.eye.y < to_float(sector.floor.altitude)    draw_flat(c, sector.floor, pit, level, window);
 }
 
 // Both ends nearer than min_z.
 is_nearer :: (c: *Camera, a: Vector2, b: Vector2, min_z: float) -> bool {
     return to_view(c, .{a.x, 0, a.y}).z < min_z && to_view(c, .{b.x, 0, b.y}).z < min_z;
 }
+
+// Wholly on the camera's side of the opening the sector is seen through, its ends on that
+// side or on the opening's line: nothing of it can be seen through the opening. The
+// original's min_z test keeps a wall that meets the opening at its nearer end; drawn by
+// columns, as the original draws, that covers nothing, but its polygon cut to the window
+// does. Where a sector is seen through a notch of the camera's sector and that notch through
+// the sector again (TESTBASE's bay under the overhang), such a wall opened the notch a
+// second time over the sector beyond it, by rounding, flickering as the view turned.
+is_before_opening :: (c: *Camera, level: s32, a: Vector2, b: Vector2) -> bool {
+    if level == 0 return false;
+    through := c.path[level - 1];
+    sector := *world.level.sectors[through.sector];
+    wall := *sector.walls[through.wall];
+    p, q := to_vector(sector.vertices[wall.left]), to_vector(sector.vertices[wall.right]);
+    d := q - p;
+    span := length(d);
+    if span <= 0 return false;
+    // Signed distances from the opening's line.
+    get_distance :: (d: Vector2, p: Vector2, x: Vector2, span: float) -> float { return (d.x * (x.y - p.y) - d.y * (x.x - p.x)) / span; }
+    eye := get_distance(d, p, .{c.eye.x, c.eye.z}, span);
+    // The camera in the opening's plane sees past it all around (see is_in_opening).
+    if abs(eye) < ON_LINE return false;
+    side := ifx eye > 0 then 1.0 else -1.0;
+    return get_distance(d, p, a, span) * side > -ON_LINE && get_distance(d, p, b, span) * side > -ON_LINE;
+}
+
+ON_LINE :: 0.001;          // World units: a point this near a line is on it.
 
 // A point on the screen at view depth z.
 unproject :: (c: *Camera, p: Vector2, z: float) -> Vector3 {
@@ -441,15 +575,15 @@ is_in_opening :: (c: *Camera, quad: [4] Vector3) -> bool {
 }
 
 // The part of the window the opening shows, and whether there's any. close: the camera is
-// in the opening (is_in_opening), so it shows what's beyond its plane.
-get_portal_window :: (c: *Camera, quad: [4] Vector3, window: Window) -> Window, bool, bool {
+// in the opening (in_opening), so it shows what's beyond its plane.
+get_portal_window :: (c: *Camera, quad: [4] Vector3, window: Window, in_opening: bool) -> Window, bool, bool {
     result: Window;
     a := Vector2.{quad[0].x, quad[0].z};
     b := Vector2.{quad[1].x, quad[1].z};
     d := b - a;
     len := length(d);
     if len <= 0 return result, false, false;
-    if is_in_opening(c, quad) {
+    if in_opening {
         // The camera is in the opening, within the near plane of it: what it sees beyond
         // the opening's plane, it sees through the opening. A pixel's ray reaches past the
         // plane when it heads against the plane's normal (toward the camera's side); in
@@ -459,6 +593,15 @@ get_portal_window :: (c: *Camera, quad: [4] Vector3, window: Window) -> Window, 
         nz := inward.x * c.sin + inward.y * c.cos;
         // n . ((x - center) / focal, *, 1) < 0
         result = clip_half_plane(window, nx / c.focal, nz - nx * c.width * 0.5 / c.focal);
+        // And between the opening's ends: past an end, a ray crosses the plane beside the
+        // opening, not through it. A ray r is on the opening's side of the end e when
+        // e x r has the sign of e x -n.
+        for end: Vector2.[a, b] {
+            e := to_view(c, .{end.x, 0, end.y});
+            s := ifx e.x * nz - e.z * nx < 0 then 1.0 else -1.0;     // sign of e x -n
+            // s * (e.x - e.z * (x - center) / focal) > 0
+            result = clip_half_plane(result, s * e.z / c.focal, -s * (e.x + e.z * c.width * 0.5 / c.focal));
+        }
         return result, result.count >= 3, true;
     }
 
@@ -535,46 +678,52 @@ clip_window :: (poly: Window, p: Vector2, q: Vector2, window: Window) -> Window 
 
 // Objects ----------------------------------------------------------------------------------
 
-Object_Draw :: struct {
-    object: s32;
-    z: float;
+// In the order they're listed: the depth buffer sorts them, and their transparent texels
+// are discarded rather than blended.
+draw_objects :: (c: *Camera, sector_index: s32, level: s32) {
+    render_set_world_draw(.GEOMETRY, xx level);
+    for object: walk_sector(sector_index) {
+        if is_on_vue_path(object) {
+            // Once, though the sector may be seen through more than one opening.
+            listed := false;
+            for c.on_paths  if it.object == object  listed = true;
+            if !listed  array_add(*c.on_paths, .{object, sector_index});
+            continue;
+        }
+        draw_object(c, object, sector_index);
+    }
 }
 
-draw_objects :: (c: *Camera, sector_index: s32, level: s32) {
-    count := count_sector_objects(sector_index);
-    if !count return;
-    sector := *world.level.sectors[sector_index];
-    lighting := get_lighting(c, sector);
+is_on_vue_path :: (object: s32) -> bool {
+    for world.vues  if it.object == object return true;
+    return false;
+}
+
+// Lit by the sector it's drawn in.
+draw_object :: (c: *Camera, index: s32, sector: s32) {
+    object := world.objects[index];
+    if object.flags & OBJECT_HIDDEN return;
+    lighting := get_lighting(c, *world.level.sectors[sector]);
     render_set_lighting(lighting);
-    render_set_world_draw(.GEOMETRY, xx level);
-
-    order := NewArray(count, Object_Draw,, temp);
-    for walk_sector(sector_index)  order[it_index] = .{it, to_view(c, to_vector(world.objects[it].position)).z};
-    quick_sort(order, (a: Object_Draw, b: Object_Draw) -> float64 { return b.z - a.z; });
-
-    for order {
-        object := world.objects[it.object];
-        if object.flags & OBJECT_HIDDEN continue;
-        // Enhanced only: the logic keeps the original's frames, the drawing goes between them.
-        between: Object;
-        if c.smooth {
-            moving, position, matrix := get_vue_in_between(it.object);
-            if moving {
-                between = object.*;
-                between.position = position;
-                between.matrix = matrix;
-                object = *between;
-            }
+    // Enhanced only: the logic keeps the original's frames, the drawing goes between them.
+    between: Object;
+    if c.smooth {
+        moving, position, matrix := get_vue_in_between(index);
+        if moving {
+            between = object.*;
+            between.position = position;
+            between.matrix = matrix;
+            object = *between;
         }
-        if it.z >= 1  note_drawn_object(it.object);
-        if object.class == {
-            case .SPRITE;
-                if object.data >= 0 && object.data < world.sprites.count  draw_sprite(c, object, *world.sprites[object.data], lighting, true);
-            case .FRAME;
-                if object.data >= 0 && object.data < world.frames.count   draw_sprite(c, object, *world.frames[object.data], lighting, false);
-            case .MODEL;
-                if object.data >= 0 && object.data < world.models.count   draw_model(c, object, *world.models[object.data], lighting);
-        }
+    }
+    if to_view(c, to_vector(world.objects[index].position)).z >= 1  note_drawn_object(index);
+    if object.class == {
+        case .SPRITE;
+            if object.data >= 0 && object.data < world.sprites.count  draw_sprite(c, object, *world.sprites[object.data], lighting, true);
+        case .FRAME;
+            if object.data >= 0 && object.data < world.frames.count   draw_sprite(c, object, *world.frames[object.data], lighting, false);
+        case .MODEL;
+            if object.data >= 0 && object.data < world.models.count   draw_model(c, object, *world.models[object.data], lighting);
     }
 }
 
@@ -614,10 +763,15 @@ draw_sprite :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting
     bottom := top + image.height * sy;
     u0, u1 := 0.0, cast(float) image.width;
     if frame.flip  u0, u1 = u1, u0;
-    // Through the goggles sprites are drawn unlit (0x4c320).
-    light := ifx object.lit || world.player_state.goggles_on then LIGHT_FULL else get_light_by_depth(lighting, world.colormap.light_ramp, to_fixed(v.z));
+    // Through the goggles sprites are drawn unlit (0x4c320). Enhanced: a fractional level,
+    // so the sprite darkens smoothly with distance.
+    light: float = LIGHT_FULL;
+    if !object.lit && !world.player_state.goggles_on {
+        if c.smooth  light = get_light_by_depth_smooth(lighting, world.smooth_ramp, v.z);
+        else         light = xx get_light_by_depth(lighting, world.colormap.light_ramp, to_fixed(v.z));
+    }
     render_set_image(image);
-    render_add_quad(.{left, top, v.z}, .{right, bottom, v.z}, .{u0, 0}, .{u1, xx image.height}, xx light, v.z,
+    render_add_quad(.{left, top, v.z}, .{right, bottom, v.z}, .{u0, 0}, .{u1, xx image.height}, light, v.z,
                     render_pack_color(.TEXTURE_FLAT, transparent = true));
 }
 
@@ -628,7 +782,7 @@ draw_model :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting)
     if !model.vertices return;
     position := to_vector(object.position);
     center := to_view(c, position);
-    if center.z + model.radius < NEAR return;
+    if center.z + model.radius < MODEL_NEAR return;
 
     // The object's matrix: from its angles, or as a path set it (vue.jai).
     m: Matrix3;
@@ -706,7 +860,8 @@ draw_model :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting)
         if polygon.shading == {
             case .FLAT;    mode = .FLAT;
             case .GOURAUD; mode = ifx intensities then .SHADED else .FLAT;
-            case .TEXTURE; mode = .TEXTURE_DEPTH;
+            // One light for the polygon, as FLAT (0x5f7cc); only PLANE is lit by depth.
+            case .TEXTURE; mode = .TEXTURE_FLAT;
             case .GOURTEX; mode = ifx intensities then .TEXTURE_SHADED else .TEXTURE_DEPTH;
             case .PLANE;   mode = .TEXTURE_DEPTH;
         }
@@ -718,24 +873,63 @@ draw_model :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting)
             flat_light = LIGHT_FULL;
         }
         color := render_pack_color(mode, polygon.color);
+        plane_offset: Vector2;
+        if polygon.shading == .PLANE && object.sector >= 0 {
+            sector := *world.level.sectors[object.sector];
+            plane_y := position.y + model.vertices[polygon.indices[0]].y;
+            flat := ifx plane_y > c.eye.y then sector.floor else sector.ceiling;
+            plane_offset = to_vector(flat.offset);
+        }
 
-        corners: [4] Render_Vertex;
+        corners: [5] Render_Vertex;
         for 0..polygon.count-1 {
             index := polygon.indices[it];
             v := transformed[index];
             uv := polygon.uvs[it];
             if polygon.shading == .PLANE {
-                // Projected from above in world space, like a floor (8 texels to a unit).
+                // Textured like a flat of the sector the object is in (0x55227, 0x5f1ac):
+                // its floor's offset below the eye, its ceiling's above, so a sector's
+                // scroll_floor carries the texture (DTENTION's shuttle deck rides one).
                 w := position + turn(model.vertices[index], m);
-                uv = .{w.x * 8, w.z * 8};
+                uv = .{(plane_offset.x - w.x) * 8, (w.z - plane_offset.y) * 8};
             }
             light := ifx (mode == .SHADED || mode == .TEXTURE_SHADED) then intensities[index] else flat_light;
             corners[it] = .{v, uv, light, v.z, color};
         }
+        count := clip_to_model_near(*corners, polygon.count);
+        if count < 3 continue;
         render_set_image(image);
-        render_add_triangles(.[corners[0], corners[1], corners[2]]);
-        if polygon.count == 4  render_add_triangles(.[corners[0], corners[2], corners[3]]);
+        for 1..count-2  render_add_triangles(.[corners[0], corners[it], corners[it + 1]]);
     }
+}
+
+// 3D objects have their own near plane, a unit out (0x5f934, 0x6052c, 0x62488): an edge
+// that crosses it gets a corner on it, its texture coordinates and light in between.
+MODEL_NEAR :: 1.0;
+
+clip_to_model_near :: (corners: *[5] Render_Vertex, count: int) -> int {
+    clipped: [5] Render_Vertex;
+    out := 0;
+    for i: 0..count-1 {
+        a := corners.*[i];
+        b := corners.*[(i + 1) % count];
+        a_in := a.position.z >= MODEL_NEAR;
+        b_in := b.position.z >= MODEL_NEAR;
+        if a_in  { clipped[out] = a; out += 1; }
+        if a_in != b_in {
+            t := (MODEL_NEAR - a.position.z) / (b.position.z - a.position.z);
+            c := a;
+            c.position = a.position + (b.position - a.position) * t;
+            c.position.z = MODEL_NEAR;
+            c.uv = a.uv + (b.uv - a.uv) * t;
+            c.light = a.light + (b.light - a.light) * t;
+            c.depth = MODEL_NEAR;
+            clipped[out] = c;
+            out += 1;
+        }
+    }
+    corners.* = clipped;
+    return out;
 }
 
 to_float :: fixed_to_float;

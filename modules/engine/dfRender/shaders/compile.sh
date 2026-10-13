@@ -13,6 +13,7 @@ compile() {
 compile vert scene.vert.hlsl   scene.vert.spv
 compile vert scene.vert.hlsl   scene_points.vert.spv -DPOINTS
 compile frag scene.frag.hlsl   scene.frag.spv
+compile frag scene.frag.hlsl   scene_rgb.frag.spv -DRGB
 compile vert resolve.vert.hlsl resolve.vert.spv
 compile frag resolve.frag.hlsl resolve.frag.spv
 compile vert film.vert.hlsl    film.vert.spv

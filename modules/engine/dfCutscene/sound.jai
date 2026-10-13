@@ -80,6 +80,12 @@ rewind_sound :: (sound: *Cut_Sound) {
 
 run_sound_command :: (sound: *Cut_Sound, op: Film_Op, args: [] u8) {
     arg :: (i: s64) -> s32 #expand { return film_get_arg(args, i); }
+    // Seeking, only what the sound is to do later.
+    if cut.seeking {
+        if op == .SOUND_VAR1 { sound.var1 = arg(0); if sound.var1 == 1  sound.keep = true; }
+        if op == .SOUND_VAR2  sound.var2 = arg(0);
+        return;
+    }
     audio_lock();
     defer audio_unlock();
     if op == {

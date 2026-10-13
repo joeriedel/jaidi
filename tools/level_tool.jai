@@ -19,7 +19,7 @@ show_level_tool :: (open: *bool) {
             ImGui.PopID();
         }
         ImGui.Separator();
-        ImGui.TextWrapped("WASD move, mouse look, Shift run, Space jump, C crouch, arrows turn, Page Up/Down look, F5 headlight, F12 Enhanced (high resolution) or 320x200, Esc back.");
+        ImGui.TextWrapped("WASD move, mouse look, Shift run, Space jump, C crouch, arrows turn, Page Up/Down look, F5 headlight, F12 Enhanced (high resolution) or 320x200, Esc the menu (Abort Mission comes back here).");
     }
     ImGui.End();
 }

@@ -101,6 +101,12 @@ Safe :: struct {
 
 world_get_agent :: () -> *Agent { return *agent; }
 
+// The weapon in hand becomes the one the agent starts the next level with, as a mission's end
+// saves it (0x2f504): for levels played from the tools, which have no mission to end.
+world_keep_weapon :: () {
+    if world.loaded  agent.weapon = world.player_state.current_weapon;
+}
+
 world_get_player_state :: () -> *Player_State { return *world.player_state; }
 
 world_get_secrets_percent :: () -> s32 { return world.player_state.secrets_percent; }
@@ -147,6 +153,19 @@ world_toggle_headlight :: () {
     } else {
         send_message(MSG_NO_BATTERY);
     }
+}
+
+// For the debug panel: every weapon with full ammo, the keys, the goggles, cleats and mask,
+// a full battery, health and shields. The mission's own items (plans, codes and the rest)
+// stay out, since picking them up is what completes goals.
+world_give_everything :: () {
+    if !world.loaded return;
+    for cast(s32) Item_Slot.PISTOL..cast(s32) Item_Slot.MASK  agent.items[it] = -1;
+    agent.detonator_weapon, agent.mine_weapon = -1, -1;
+    for * agent.ammo  it.* = AMMO_MAX[it_index];
+    agent.battery = BATTERY_FULL;
+    agent.health = HEALTH_MAX;
+    if agent.shields >= 0  agent.shields = SHIELDS_MAX;
 }
 
 // The goggles (0x2a508, 0x2a628): only with them in the inventory, on only with charge in

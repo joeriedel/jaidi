@@ -56,7 +56,8 @@ model_parses :: () {
     quad := model.polygons[1];
     check(quad.count == 4 && quad.indices[0] == 3 && quad.indices[3] == 6, "object vertex indices not offset: %", quad.indices);
     check(quad.texture == 0 && quad.shading == .TEXTURE, "textured quad %", quad);
-    check(quad.uvs[1].x == 16 && quad.uvs[1].y == 16, "uvs not scaled to texels: %", quad.uvs);
+    // Texture vertex (1, 1): v counts up from the texture's bottom row, so the top, row 0.
+    check(quad.uvs[1].x == 16 && quad.uvs[1].y == 0, "uvs not scaled to texels: %", quad.uvs);
     check(model.polygons[2].shading == .GOURAUD && model.vertex_lit, "gouraud not vertex lit");
     check(model.vertex_normals.count == 7, "% vertex normals", model.vertex_normals.count);
 } @test
