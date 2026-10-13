@@ -1,0 +1,10 @@
+EXPORTS
+    OPL3_Generate
+    OPL3_GenerateResampled
+    OPL3_Reset
+    OPL3_WriteReg
+    OPL3_WriteRegBuffered
+    OPL3_GenerateStream
+    OPL3_Generate4Ch
+    OPL3_Generate4ChResampled
+    OPL3_Generate4ChStream

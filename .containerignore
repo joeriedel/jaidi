@@ -1,0 +1,7 @@
+# Keep the podman build context small: build.sh uses the repo root as context,
+# but the image only needs docker/ and jai/ (bind-mounted to build Jails).
+dark/
+.svn/
+**/.svn/
+bin/
+.build/

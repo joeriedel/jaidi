@@ -1,0 +1,17 @@
+jaidi changelog
+===============
+
+0.1.0 (2026-10-12)
+------------------
+
+Preliminary release, generally feature complete, missing settings and configuration screens though. I am unsure how I want to do this exactly since the original game's settings, if I recall correctly, used a separate setup app for that. And I don't even remember if keys were actually configurable either.
+
+- Full campaign: cinematics, briefings, agent menu, Esc menu.
+- All INF scripting: doors, lifts, switches, keys, teleporters, moving walls and floors.
+- PDA (F1) and the map overlay (Tab).
+- Headlamp, goggles, ice cleats and gas mask (F2 to F5).
+- All ten weapons, secondary fire included.
+- All enemies and bosses, including the dark troopers, Mohc and Boba Fett.
+- OPL3 music using the original FM driver's instruments, plus sound effects and voices.
+- Enhanced mode (F12, on by default): levels at your screen's resolution; cinematics redrawn with smooth motion, in-between frames, upscaled art and widescreen.
+- Windows and Linux.

@@ -1,0 +1,6 @@
+{
+  "build_root": "first.jai",
+  "local_modules": ["modules"],
+  "roots": ["first.jai"],
+  "intermediate_path": ".build"
+}
