@@ -13,6 +13,12 @@ cbuffer Projection : register(b0, space1) {
                             // view's reversed depth; w 1 puts everything at the far plane.
 };
 
+// A plane in view space that cuts away what's behind it: a sector seen through an opening
+// shows only what's past the opening (see dfWorld/draw.jai). (0, 0, 0, 1) cuts nothing.
+cbuffer Clip : register(b1, space1) {
+    float4 clip_plane;
+};
+
 struct Input {
     float3 position : TEXCOORD0;
     float2 uv       : TEXCOORD1;
@@ -27,6 +33,7 @@ struct Output {
     float  light    : TEXCOORD1;
     float  depth    : TEXCOORD2;
     nointerpolation uint color : TEXCOORD3;
+    float  clip     : SV_ClipDistance0;
 #ifdef POINTS
     [[vk::builtin("PointSize")]] float point_size : PSIZE;
 #endif
@@ -55,6 +62,7 @@ Output main(Input input) {
     output.light = input.light;
     output.depth = input.depth;
     output.color = input.color;
+    output.clip  = dot(clip_plane.xyz, p) + clip_plane.w;
 #ifdef POINTS
     output.point_size = 1.0;
 #endif

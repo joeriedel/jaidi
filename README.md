@@ -99,6 +99,27 @@ The whole game plays, every enemy and boss included. Not there yet: settings and
 
 In cinematics, Esc or Enter skips, and Space goes to the next scene.
 
+### Cheats
+
+The original's cheat codes, typed during a level:
+
+| Code | |
+|------|---|
+| LAIMLAME | invincibility on or off |
+| LAPOSTAL | all weapons and ammo, full health and shields |
+| LAMAXOUT | everything: weapons, ammo, keys and items |
+| LABRADY | ammo for the weapons you have, full health and shields |
+| LAUNLOCK | keys and items |
+| LARANDY | weapon supercharge |
+| LAPOGO | climb any height, on or off |
+| LABUG | insect mode, on or off |
+| LAREDLITE | enemies frozen, on or off |
+| LACDS | the whole map, shown three ways in turn |
+| LANTFH | to the spot the map is centred on (scroll it with `` ` `` + arrows) |
+| LADATA | your coordinates, on or off |
+| LASKIP | complete the mission |
+| LASECBASE, LATALAY, LASEWERS, LATESTBASE, LAGROMAS, LADTENTION, LARAMSHED, LAROBOTICS, LANARSHADA, LAJABSHIP, LAIMPCITY, LAFUELSTAT, LAEXECUTOR, LAARC | go to that mission |
+
 Enhanced mode
 -------------
 

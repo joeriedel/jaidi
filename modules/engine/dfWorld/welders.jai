@@ -24,6 +24,7 @@ Welder :: struct {
 
     wait: Welder_Wait;
     wake: s32;                  // When the task runs next: -1 never.
+    polling: bool;              // Waiting for the AI to come back on (cheats.jai).
     in_message: bool;
     task: *Task;
 }
@@ -83,7 +84,7 @@ unload_welders :: () {
 
 // Its task's turn (tasks.jai), if its time has come.
 update_welder :: (w: *Welder) {
-    if w.wake < 0 || w.wake > world.clock.tick return;
+    if !is_ai_task_due(*w.wake, *w.polling) return;
     run_welder(w, 0);
 }
 
@@ -185,11 +186,11 @@ run_state :: (w: *Welder) {
     }
 }
 
-// A yield (0x338c8): only a run of its own sets when the task runs next.
+// A yield (0x338c8): only a run of its own sets when the task runs next, and the AI
+// switched off makes it a wait for it (cheats.jai).
 wait_welder :: (w: *Welder, wait: Welder_Wait, ticks: s32) {
     w.wait = wait;
-    if w.in_message return;
-    w.wake = ifx ticks < 0 then -1 else world.clock.tick + ticks;
+    yield_ai_task(*w.wake, *w.polling, ticks, w.in_message);
 }
 
 // Shots (0x3bc04) and blasts (0x3bc80): hurt, it groans, cutting off the last; at no hit

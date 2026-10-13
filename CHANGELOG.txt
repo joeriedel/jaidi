@@ -1,6 +1,19 @@
 jaidi changelog
 ===============
 
+0.2.1 (2026-10-13)
+------------------
+
+The original's cheat codes, and fixes from playing 0.2.0.
+
+- All 27 original cheat codes (see README).
+- Finishing a mission opens the next one on the agent menu right away and selects it, as
+  the original does.
+- Fixed: you could walk through Kyle's ship at the start of the sewers.
+- Fixed: walls missing from the platform booth in the sewers when seen from inside.
+
+Not there yet: settings and configuration screens.
+
 0.2.0 (2026-10-13)
 ------------------
 

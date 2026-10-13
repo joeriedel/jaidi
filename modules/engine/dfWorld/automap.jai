@@ -25,6 +25,7 @@ Automap_Message :: enum s32 {
     AUTO_CENTER_OFF :: 11;
     ALL_LAYERS      :: 12;  // Every layer at once, or back to one.
     REVEAL          :: 13;  // The cheat's three modes: what's seen, everything, everything in its own color.
+    TELEPORT        :: 14;  // The player to where the map looks (LANTFH).
 }
 
 // The message handler (0x1c2b3). In the PDA panning and zooming go in steps; in a level they
@@ -58,6 +59,8 @@ world_send_automap_message :: (message: Automap_Message) {
             if !m.in_pda  send_message(ifx m.all_layers then MSG_MAP_ALL_LAYERS else MSG_MAP_ONE_LAYER);
         case .REVEAL;
             m.reveal = (m.reveal + 1) % 3;
+        case .TELEPORT;
+            teleport_to_automap();
     }
 }
 
@@ -122,6 +125,36 @@ world_draw_automap_for_pda :: (pixels: [] u8, width: s32, height: s32) {
 }
 
 #scope_module
+
+// The sector under where the map looks; with one layer shown and that sector on another, the
+// first one on the layer within 200 above or below its floor, looking 10 further each way at
+// a time. The player is put on its floor. Not found, the original writes "Sector Not Found"
+// into a message slot it never shows.
+teleport_to_automap :: () {
+    m := *automap;
+    level := *world.level;
+    x, z := m.target_x, m.target_z;
+    sector := level_find_sector_at_xz(level, x, z);
+    if !m.all_layers && sector >= 0 && level.sectors[sector].layer != m.layer {
+        floor := level.sectors[sector].floor.altitude;
+        on_layer :: (level: *Level, s: s32, layer: s32) -> bool { return s >= 0 && level.sectors[s].layer == layer; }
+        distance: Fixed = 10 * FIXED_ONE;
+        while true {
+            if distance > 200 * FIXED_ONE { sector = -1; break; }
+            sector = level_find_sector(level, .{x, floor + distance, z});
+            if on_layer(level, sector, m.layer) break;
+            sector = level_find_sector(level, .{x, floor - distance, z});
+            if on_layer(level, sector, m.layer) break;
+            distance += 10 * FIXED_ONE;
+        }
+    }
+    if sector < 0 return;
+    p := *world.player;
+    change_player_sector(p, sector);
+    p.position.x, p.position.z = x, z;
+    p.position.y = level.sectors[sector].floor.altitude;
+    p.y = p.position.y;
+}
 
 automap: struct {
     on: bool;                       // The Tab map is up (0xe4977).

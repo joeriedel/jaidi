@@ -47,6 +47,7 @@ Boba_Fett :: struct {
 
     wait: Boba_Fett_Wait;
     wake: s32;                  // When the task runs next: -1 never.
+    polling: bool;              // Waiting for the AI to come back on (cheats.jai).
     in_message: bool;
     task: *Task;
 }
@@ -129,7 +130,7 @@ unload_boba_fetts :: () {
 
 // Its task's turn (tasks.jai), if its time has come.
 update_boba_fett :: (b: *Boba_Fett) {
-    if b.wake < 0 || b.wake > world.clock.tick return;
+    if !is_ai_task_due(*b.wake, *b.polling) return;
     run_boba_fett(b, 0);
 }
 
@@ -233,11 +234,11 @@ run_state :: (b: *Boba_Fett) {
     }
 }
 
-// A yield (0x338c8): only a run of its own sets when the task runs next.
+// A yield (0x338c8): only a run of its own sets when the task runs next, and the AI
+// switched off makes it a wait for it (cheats.jai).
 wait_boba_fett :: (b: *Boba_Fett, wait: Boba_Fett_Wait, ticks: s32) {
     b.wait = wait;
-    if b.in_message return;
-    b.wake = ifx ticks < 0 then -1 else world.clock.tick + ticks;
+    yield_ai_task(*b.wake, *b.polling, ticks, b.in_message);
 }
 
 // A shot or blast (0x3887c, 0x389a8): its hit points, no push. Killed, he dies at once;

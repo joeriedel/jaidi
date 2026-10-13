@@ -237,6 +237,11 @@ Actor_State :: struct {
     // What a message carries: the projectile that hit, or an explosion's damage and force.
     message_projectile: *Projectile;
     message_damage, message_force: Fixed;
+
+    // The actors' and the free movement's tasks, yielding each frame: when they run next
+    // and whether they're waiting for the AI to come back on (cheats.jai).
+    wake, free_moves_wake: s32;
+    polling, free_moves_polling: bool;
 }
 
 // The enemies and generators of the O file (0x1582e, 0x32450), by their logic: those done
@@ -296,6 +301,9 @@ free_free_move :: (m: *Free_Move) {
 // somewhere to go or a push moves, its push slid along what it hit; a sprite steps its
 // animation.
 update_free_moves :: () {
+    s := *world.actor_state;
+    if !is_ai_task_due(*s.free_moves_wake, *s.free_moves_polling) return;
+    defer yield_ai_task(*s.free_moves_wake, *s.free_moves_polling, 0, false);
     for i: 0..world.free_moves.count-1 {
         m := world.free_moves[i];
         if !m continue;
@@ -337,6 +345,8 @@ unload_actors :: () {
 update_actors :: () {
     tick := cast(u32) world.clock.tick;
     s := *world.actor_state;
+    if !is_ai_task_due(*s.wake, *s.polling) return;
+    defer yield_ai_task(*s.wake, *s.polling, 0, false);
     remove_nulls(*world.actors);
     for i: 0..world.actors.count-1 {
         actor := world.actors[i];

@@ -92,6 +92,18 @@ update_supercharge :: () {
     end_task(t);
 }
 
+// The supercharge (0x481e4): a new timer in place of any running, the child of the task
+// that starts it.
+start_supercharge :: (parent: *Task) {
+    s := *world.player_state;
+    s.supercharged = true;
+    s.supercharged_until = world.clock.tick + POWERUP_TICKS;
+    s.supercharge_blinks = 0;
+    t := *world.tasks;
+    end_task(t.supercharge);
+    t.supercharge = add_child_task(parent, .SUPERCHARGE);
+}
+
 ITEM_RIFLE      :: 5;
 ITEM_CONCUSSION :: 9;
 ITEM_POWER      :: 12;
@@ -315,12 +327,7 @@ pick_up :: (index: s32) {
                     end_task(t.invincibility);
                     t.invincibility = add_child_task(t.pickups, .INVINCIBILITY);
                 case ITEM_SUPERCHARGE;
-                    s.supercharged = true;
-                    s.supercharged_until = world.clock.tick + POWERUP_TICKS;
-                    s.supercharge_blinks = 0;
-                    t := *world.tasks;
-                    end_task(t.supercharge);
-                    t.supercharge = add_child_task(t.pickups, .SUPERCHARGE);
+                    start_supercharge(world.tasks.pickups);
                 case ITEM_REVIVE;
                     if agent.health < 100 || agent.shields < 200 {
                         revive_stats();

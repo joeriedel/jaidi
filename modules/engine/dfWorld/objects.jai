@@ -201,7 +201,10 @@ place_objects :: () {
         // Whatever its value (0x15dd3).
         for l.params  if it.key == "BOSS:"  o.flags |= OBJECT_BOSS;
         if !is_object_in_difficulty(l, world.object_difficulty) continue;
-        if l.class == .SPIRIT || l.class == .SOUND || l.class == .SAFE || has_logic(l, "PLAYER") continue;
+        // Spirits go in their sectors as the rest do (0x14aaf): with a RADIUS and HEIGHT
+        // they're in the way, unseen, as the ones around Kyle's ship in the sewers. The
+        // player's is the player, kept apart.
+        if l.class == .SOUND || l.class == .SAFE || has_logic(l, "PLAYER") continue;
         move_object_to_sector(index, level_find_sector(*world.level, l.position));
     }
 }

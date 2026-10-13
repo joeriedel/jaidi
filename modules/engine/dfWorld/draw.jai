@@ -374,6 +374,8 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
     exterior := (sector.flags[0] & SECTOR_EXTERIOR) != 0;
     pit := (sector.flags[0] & SECTOR_PIT) != 0;
     render_set_world_draw(.GEOMETRY, xx level);
+    clip := get_opening_clip(c, level);
+    render_set_clip_plane(clip);
 
     // A sky ceiling is behind all of the sector (0x8d0e8): whatever its walls, floor and
     // openings leave shows sky, wherever the eye is, even above the ceiling's height.
@@ -392,7 +394,7 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
 
     for * wall: sector.walls {
         a, b := to_vector(sector.vertices[wall.left]), to_vector(sector.vertices[wall.right]);
-        if !is_facing(c, a, b) || !is_in_columns(c, a, b, left, right) || is_nearer(c, a, b, min_z) || is_before_opening(c, level, a, b) continue;
+        if !is_facing(c, a, b) || !is_in_columns(c, a, b, left, right) || is_nearer(c, a, b, min_z) continue;
         render_set_lighting(get_lighting(c, sector, wall.light));
         piece := Piece.{a = a, b = b, length = length(b - a)};
         if piece.length <= 0 continue;
@@ -440,7 +442,9 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
 
     // Before the openings: their marks are depth tested, so what stands in front of one keeps
     // it covered.
+    render_set_clip_plane(NO_CLIP);
     draw_objects(c, sector_index, level);
+    render_set_clip_plane(clip);
 
     for * wall, wall_index: sector.walls {
         if wall.adjoin < 0 continue;
@@ -450,7 +454,7 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
         for 0..level-1  if c.path[it].sector == sector_index && c.path[it].wall == wall_index  on_path = true;
         if on_path continue;
         a, b := to_vector(sector.vertices[wall.left]), to_vector(sector.vertices[wall.right]);
-        if !is_facing(c, a, b) || c.visits >= MAX_VISITS || level + 1 >= MAX_DEPTH || is_before_opening(c, level, a, b) continue;
+        if !is_facing(c, a, b) || c.visits >= MAX_VISITS || level + 1 >= MAX_DEPTH continue;
         next := *world.level.sectors[wall.adjoin];
         top := to_float(max(sector.ceiling.altitude, next.ceiling.altitude));
         bottom := to_float(min(sector.floor.altitude, next.floor.altitude));
@@ -492,6 +496,7 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
         render_add_triangles(opening);
         c.path[level] = .{sector_index, xx wall_index};
         draw_sector(c, wall.adjoin, level + 1, inner, next_min_z);
+        render_set_clip_plane(clip);
         render_set_world_draw(.PORTAL_RESTORE, xx (level | STENCIL_DRAWN));
         render_add_triangles(opening);
         render_set_world_draw(.GEOMETRY, xx level);
@@ -517,32 +522,33 @@ is_nearer :: (c: *Camera, a: Vector2, b: Vector2, min_z: float) -> bool {
     return to_view(c, .{a.x, 0, a.y}).z < min_z && to_view(c, .{b.x, 0, b.y}).z < min_z;
 }
 
-// Wholly on the camera's side of the opening the sector is seen through, its ends on that
-// side or on the opening's line: nothing of it can be seen through the opening. The
-// original's min_z test keeps a wall that meets the opening at its nearer end; drawn by
-// columns, as the original draws, that covers nothing, but its polygon cut to the window
-// does. Where a sector is seen through a notch of the camera's sector and that notch through
-// the sector again (TESTBASE's bay under the overhang), such a wall opened the notch a
-// second time over the sector beyond it, by rounding, flickering as the view turned.
-is_before_opening :: (c: *Camera, level: s32, a: Vector2, b: Vector2) -> bool {
-    if level == 0 return false;
+// A sector seen through an opening is drawn past the opening's plane only, a little short of
+// it so what lies on the plane still shows: nothing on the camera's side of an opening can
+// be seen through it, whatever the walls and openings beyond do there (Test Base's bay seen
+// through a notch it opens back into, which rounding would let open again over the bay).
+// Objects aren't cut (draw_sector): one standing in an opening reaches across it, and the
+// original draws it whole there. With the camera in the opening's plane, it sees past it
+// all round, so nothing is cut.
+get_opening_clip :: (c: *Camera, level: s32) -> Clip_Plane {
+    if level == 0 return NO_CLIP;
     through := c.path[level - 1];
     sector := *world.level.sectors[through.sector];
     wall := *sector.walls[through.wall];
     p, q := to_vector(sector.vertices[wall.left]), to_vector(sector.vertices[wall.right]);
-    d := q - p;
-    span := length(d);
-    if span <= 0 return false;
-    // Signed distances from the opening's line.
-    get_distance :: (d: Vector2, p: Vector2, x: Vector2, span: float) -> float { return (d.x * (x.y - p.y) - d.y * (x.x - p.x)) / span; }
-    eye := get_distance(d, p, .{c.eye.x, c.eye.z}, span);
-    // The camera in the opening's plane sees past it all around (see is_in_opening).
-    if abs(eye) < ON_LINE return false;
-    side := ifx eye > 0 then 1.0 else -1.0;
-    return get_distance(d, p, a, span) * side > -ON_LINE && get_distance(d, p, b, span) * side > -ON_LINE;
+    a, b := to_view(c, .{p.x, 0, p.y}), to_view(c, .{q.x, 0, q.y});
+    // Vertical in view space too: the view only turns about y.
+    n := Vector3.{b.z - a.z, 0, a.x - b.x};
+    span := length(n);
+    if span <= 0 return NO_CLIP;
+    n /= span;
+    d := -dot(n, a);
+    // The eye, the view's origin, on the cut side.
+    if d > 0 { n = -n; d = -d; }
+    if d > -ON_PLANE return NO_CLIP;
+    return .[n.x, n.y, n.z, d + ON_PLANE];
 }
 
-ON_LINE :: 0.001;          // World units: a point this near a line is on it.
+ON_PLANE :: 0.01;           // World units: this near an opening's plane counts as on it.
 
 // A point on the screen at view depth z.
 unproject :: (c: *Camera, p: Vector2, z: float) -> Vector3 {

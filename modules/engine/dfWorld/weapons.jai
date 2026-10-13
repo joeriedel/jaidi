@@ -1587,6 +1587,12 @@ aim_at_drawn :: (from: Fixed3, pitch: s32, yaw: s32, variation: s32) -> bool {
 
 #scope_module
 
+// 0x43134: the weapon in hand at its resting frame, after the cheats change the ammo.
+reset_weapon_frame :: () {
+    w := *world.weapon;
+    w.weapons[w.current].frame = get_rest_frame();
+}
+
 // The weapon's turn (0x896b8) and a vector turned by it (0x89868).
 get_weapon_matrix :: (pitch: s32, yaw: s32) -> [9] Fixed {
     sin_pitch, cos_pitch := sin_cos(pitch);

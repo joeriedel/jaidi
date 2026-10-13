@@ -48,6 +48,7 @@ Kell_Dragon :: struct {
 
     wait: Kell_Wait;
     wake: s32;                  // When the task runs next: -1 never.
+    polling: bool;              // Waiting for the AI to come back on (cheats.jai).
     in_message: bool;
     task: *Task;
 }
@@ -128,7 +129,7 @@ unload_kell_dragons :: () {
 
 // Its task's turn (tasks.jai), if its time has come.
 update_kell_dragon :: (k: *Kell_Dragon) {
-    if k.wake < 0 || k.wake > world.clock.tick return;
+    if !is_ai_task_due(*k.wake, *k.polling) return;
     run_kell_dragon(k, 0);
 }
 
@@ -303,11 +304,11 @@ run_state :: (k: *Kell_Dragon) {
     }
 }
 
-// A yield (0x338c8): only a run of its own sets when the task runs next.
+// A yield (0x338c8): only a run of its own sets when the task runs next, and the AI
+// switched off makes it a wait for it (cheats.jai).
 wait_kell :: (k: *Kell_Dragon, wait: Kell_Wait, ticks: s32) {
     k.wait = wait;
-    if k.in_message return;
-    k.wake = ifx ticks < 0 then -1 else world.clock.tick + ticks;
+    yield_ai_task(*k.wake, *k.polling, ticks, k.in_message);
 }
 
 // An action played once at rate 8, the rate set after the action's own.

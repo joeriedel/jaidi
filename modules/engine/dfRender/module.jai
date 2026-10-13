@@ -100,8 +100,8 @@ render_init :: (device: *SDL_GPUDevice) -> bool {
     if !SDL_GPUTextureSupportsFormat(device, .D32_FLOAT_S8_UINT, ._2D, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET)
         renderer.stencil_format = .D24_UNORM_S8_UINT;
 
-    scene_vert  := create_shader(SCENE_VERT_SPV, .VERTEX, 0, 1);
-    points_vert := create_shader(SCENE_POINTS_VERT_SPV, .VERTEX, 0, 1);
+    scene_vert  := create_shader(SCENE_VERT_SPV, .VERTEX, 0, 2);
+    points_vert := create_shader(SCENE_POINTS_VERT_SPV, .VERTEX, 0, 2);
     scene_frag  := create_shader(SCENE_FRAG_SPV, .FRAGMENT, 2, 1);
     scene_rgb_frag := create_shader(SCENE_RGB_FRAG_SPV, .FRAGMENT, 3, 1);
     resolve_vert := create_shader(RESOLVE_VERT_SPV, .VERTEX, 0, 0);
@@ -345,12 +345,22 @@ render_begin_view :: (view: *View, palette: *Palette, colormap: *Gpu_Colormap, p
     renderer.world_draw = .GEOMETRY;
     renderer.stencil = 0;
     renderer.sky = .{};
+    renderer.clip = NO_CLIP;
 }
 
 // Lighting for the draws that follow, in the original's terms.
 render_set_lighting :: (lighting: Lighting) {
     renderer.lighting = lighting;
 }
+
+// The plane in view space that the draws that follow are cut by, keeping where
+// a x + b y + c z + d is 0 or more; NO_CLIP for none.
+render_set_clip_plane :: (plane: Clip_Plane) {
+    renderer.clip = plane;
+}
+
+Clip_Plane :: [4] float;
+NO_CLIP :: float.[0, 0, 0, 1];
 
 // The texture for the draws that follow; null for none.
 render_set_image :: (image: *Gpu_Image) {
@@ -437,6 +447,8 @@ render_submit :: (command_buffer: *SDL_GPUCommandBuffer) {
         if pass.first_batch < last_batch {
             binding := SDL_GPUBufferBinding.{buffer = renderer.vertex_buffer};
             SDL_PushGPUVertexUniformData(command_buffer, 0, *pass.projection, size_of(Projection_Uniform));
+            clip := NO_CLIP;
+            SDL_PushGPUVertexUniformData(command_buffer, 1, *clip, size_of(Clip_Plane));
             current: *SDL_GPUGraphicsPipeline;
             stencil := -1;
             in_overlay := false;
@@ -461,6 +473,10 @@ render_submit :: (command_buffer: *SDL_GPUCommandBuffer) {
                         SDL_PushGPUVertexUniformData(command_buffer, 0, *projection, size_of(Projection_Uniform));
                         in_overlay = overlay;
                     }
+                }
+                if memcmp(*batch.clip, *clip, size_of(Clip_Plane)) != 0 {
+                    clip = batch.clip;
+                    SDL_PushGPUVertexUniformData(command_buffer, 1, *clip, size_of(Clip_Plane));
                 }
                 samplers: [3] SDL_GPUTextureSamplerBinding;
                 samplers[0] = .{texture = ifx batch.image then batch.image else renderer.blank_image.texture, sampler = renderer.sampler};
@@ -564,6 +580,7 @@ Batch :: struct {
     points:   bool;
     world_draw: World_Draw;     // Only for world views.
     stencil:  u8;
+    clip:     Clip_Plane;
     first, count: u32;
 }
 
@@ -595,6 +612,7 @@ renderer: struct {
     world_draw: World_Draw;
     stencil:  u8;
     sky:      Sky;
+    clip:     Clip_Plane;
 };
 
 Upload :: struct {
@@ -663,7 +681,7 @@ add_vertices :: (vertices: [] Render_Vertex, points: bool) {
     if !vertices || !renderer.passes return;
     last := ifx renderer.batches.count > renderer.passes[renderer.passes.count - 1].first_batch then *renderer.batches[renderer.batches.count - 1] else null;
     world_draw := ifx points then World_Draw.POINTS else renderer.world_draw;
-    if !last || last.image != renderer.image || last.points != points || last.world_draw != world_draw || last.stencil != renderer.stencil
+    if !last || last.image != renderer.image || last.points != points || last.world_draw != world_draw || last.stencil != renderer.stencil || memcmp(*last.clip, *renderer.clip, size_of(Clip_Plane)) != 0
        || memcmp(*last.lighting, *renderer.lighting, size_of(Lighting)) != 0 || memcmp(*last.sky, *renderer.sky, size_of(Sky)) != 0 {
         last = array_add(*renderer.batches);
         last.image    = renderer.image;
@@ -672,6 +690,7 @@ add_vertices :: (vertices: [] Render_Vertex, points: bool) {
         last.world_draw = world_draw;
         last.stencil  = renderer.stencil;
         last.sky      = renderer.sky;
+        last.clip     = renderer.clip;
         last.first    = xx renderer.vertices.count;
     }
     array_add(*renderer.vertices, ..vertices);

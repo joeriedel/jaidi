@@ -67,6 +67,7 @@ Dark_Trooper :: struct {
 
     wait: Dark_Trooper_Wait;
     wake: s32;                  // When the task runs next: -1 never.
+    polling: bool;              // Waiting for the AI to come back on (cheats.jai).
     in_message: bool;
     task: *Task;
 }
@@ -178,7 +179,7 @@ unload_dark_troopers :: () {
 
 // Its task's turn (tasks.jai), if its time has come.
 update_dark_trooper :: (t: *Dark_Trooper) {
-    if t.wake < 0 || t.wake > world.clock.tick return;
+    if !is_ai_task_due(*t.wake, *t.polling) return;
     run_dark_trooper(t, 0);
 }
 
@@ -431,11 +432,11 @@ run_state :: (t: *Dark_Trooper) {
     }
 }
 
-// A yield (0x338c8): only a run of its own sets when the task runs next.
+// A yield (0x338c8): only a run of its own sets when the task runs next, and the AI
+// switched off makes it a wait for it (cheats.jai).
 wait_dark_trooper :: (t: *Dark_Trooper, wait: Dark_Trooper_Wait, ticks: s32) {
     t.wait = wait;
-    if t.in_message return;
-    t.wake = ifx ticks < 0 then -1 else world.clock.tick + ticks;
+    yield_ai_task(*t.wake, *t.polling, ticks, t.in_message);
 }
 
 // Hits ---------------------------------------------------------------------------------------

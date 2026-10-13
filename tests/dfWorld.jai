@@ -1960,6 +1960,151 @@ dtention_shot_switch_within_sign :: () {
     check(world_get_switch_frame(s, 5) == 1, "the switch didn't turn, shot on its sign");
 } @test
 
+// The cheat codes as typed (0x132ca): L and A arm them, a whole code runs it, and a key that
+// doesn't go on to spell one ends the typing, so the rest of it does nothing.
+secbase_cheat_typing :: () {
+    skip_without_dark();
+    if !start_level("SECBASE") return;
+    defer world_unload();
+    defer world_reset_cheats();
+    s := world_get_player_state();
+    type_cheat("laimxlame");
+    if !check(s.invincible == 0, "a near miss made the player invincible") return;
+    type_cheat("laimlame");
+    check(s.invincible == -2 && world_get_hud_message() == "Full Invincibility Toggle", "LAIMLAME: invincible %, message \"%\"", s.invincible, world_get_hud_message());
+    // L, A and a key with no character for it: Shift, say.
+    type_cheat("la");
+    world_type_cheat_key(0);
+    type_cheat("imlame");
+    check(s.invincible == -2, "typing went on past a key with no character");
+    type_cheat("llaimlame");
+    check(s.invincible == 0, "L twice then A didn't arm the codes");
+} @test
+
+// The gives, as the original's lists have them: LAPOSTAL every weapon and full ammo but no
+// keys, LABRADY ammo only for the weapons there are, LAUNLOCK the keys and mission items, all
+// with health and shields up.
+secbase_cheat_gives :: () {
+    skip_without_dark();
+    saved := world_get_agent().*;
+    defer world_get_agent().* = saved;
+    if !start_level("SECBASE") return;
+    defer world_unload();
+    a := world_get_agent();
+    a.health, a.shields = 40, 10;
+    for * a.ammo  it.* = 0;
+    type_cheat("labrady");
+    check(a.health == 100 && a.shields == 200, "LABRADY: health %, shields %", a.health, a.shields);
+    check(a.ammo[Ammo.ENERGY] == 500 && a.ammo[Ammo.DETONATOR] == 50 && a.ammo[Ammo.MINE] == 30, "LABRADY: energy %, detonators %, mines %", a.ammo[Ammo.ENERGY], a.ammo[Ammo.DETONATOR], a.ammo[Ammo.MINE]);
+    check(a.ammo[Ammo.POWER] == 0 && a.ammo[Ammo.PLASMA] == 0 && a.ammo[Ammo.SHELL] == 0, "LABRADY gave ammo for weapons the agent hasn't: %", a.ammo);
+    type_cheat("lapostal");
+    check(a.items[Item_Slot.CANNON] != 0 && a.items[Item_Slot.MASK] != 0 && a.items[Item_Slot.RED_KEY] == 0, "LAPOSTAL: cannon %, mask %, red key %", a.items[Item_Slot.CANNON], a.items[Item_Slot.MASK], a.items[Item_Slot.RED_KEY]);
+    check(a.ammo[Ammo.MISSILE] == 20 && a.ammo[Ammo.PLASMA] == 400, "LAPOSTAL: ammo %", a.ammo);
+    type_cheat("launlock");
+    check(a.items[Item_Slot.RED_KEY] != 0 && a.items[Item_Slot.PLANS] != 0 && a.items[ITEM_SLOTS - 1] != 0, "LAUNLOCK: red key %, plans %, code 9 %", a.items[Item_Slot.RED_KEY], a.items[Item_Slot.PLANS], a.items[ITEM_SLOTS - 1]);
+    check(world_get_hud_message() == "Inventory Added", "LAUNLOCK's message: \"%\"", world_get_hud_message());
+} @test
+
+// LAPOGO and LABUG change the player as the physics runs it: the step it climbs and its size.
+secbase_cheat_height_and_bug :: () {
+    skip_without_dark();
+    if !start_level("SECBASE") return;
+    defer world_unload();
+    defer world_reset_cheats();
+    if !run(150, .{}) return;
+    p := world_get_player();
+    type_cheat("lapogo");
+    type_cheat("labug");
+    if !run(2, .{forward = true}) return;
+    check(p.step == 9999 * FIXED_ONE && p.width == 0x4CCC, "step %, width %", p.step / 65536.0, p.width / 65536.0);
+    type_cheat("lapogo");
+    type_cheat("labug");
+    if !run(2, .{forward = true}) return;
+    check(p.step == 0x38000 && p.width == 0x1CCCC, "back: step %, width %", p.step / 65536.0, p.width / 65536.0);
+} @test
+
+// LAREDLITE stops the tasks the AI covers, the paths too: Test Base's ship waits on the
+// ground; back on, it takes off within the 291 ticks it waits between looks.
+testbase_cheat_ai_off :: () {
+    skip_without_dark();
+    if !start_level("TESTBASE") return;
+    defer world_unload();
+    defer world_reset_cheats();
+    ship := find_object_with_logic("KEY");
+    if !check(ship >= 0, "no ship") return;
+    o := world_get_objects()[ship];
+    type_cheat("laredlite");
+    if !run(2, .{}) return;
+    still := o.position;
+    if !run(300, .{}) return;
+    check(is_same_place(o.position, still), "the ship moved with the AI off");
+    type_cheat("laredlite");
+    moved := -1;
+    for 1..160 {
+        if !run(1, .{}) return;
+        if !is_same_place(o.position, still) { moved = it; break; }
+    }
+    check(moved > 0, "the ship didn't go on with the AI back on");
+} @test
+
+// LANTFH puts the player back where the map looks, on its floor; LADATA's readout says
+// where.
+secbase_cheat_map_teleport :: () {
+    skip_without_dark();
+    if !start_level("SECBASE") return;
+    defer world_unload();
+    defer world_reset_cheats();
+    if !run(150, .{}) return;
+    world_toggle_automap(false);
+    defer if world_is_automap_on()  world_toggle_automap(false);
+    // Held, ` takes the map off the player, which then walks away from where it looks.
+    if !run(1, .{map_scroll = true}) return;
+    target := world_get_automap();
+    if !run(60, .{forward = true}) return;
+    p := world_get_player();
+    if !check(p.position.x != target.x || p.position.z != target.z, "the player didn't walk away") return;
+    type_cheat("lantfh");
+    check(p.position.x == target.x && p.position.z == target.z, "the player is at %, the map looks at (%, %)", at(p), target.x / 65536.0, target.z / 65536.0);
+    if !run(2, .{}) return;
+    world_toggle_automap(false);
+    type_cheat("ladata");
+    readout := world_get_data_readout();
+    expected := tprint("X:% ", formatInt(p.position.x >> 16, minimum_digits = 4));
+    check(begins_with(readout, expected) && ends_with(readout, "S:0%"), "LADATA reads \"%\"", readout);
+} @test
+
+// The missions' codes and LASKIP ask the level to end once a frame has run after them;
+// LASKIP completes the mission.
+secbase_cheat_level_exits :: () {
+    skip_without_dark();
+    if !start_level("SECBASE") return;
+    defer world_unload();
+    type_cheat("latalay");
+    exit, mission := world_get_level_exit();
+    check(!exit, "the way out came before a frame ran");
+    if !run(1, .{}) return;
+    exit, mission = world_get_level_exit();
+    check(exit && mission == 2, "LATALAY: out %, to mission %", exit, mission);
+    if !start_level("SECBASE") return;
+    type_cheat("laskip");
+    if !run(1, .{}) return;
+    exit, mission = world_get_level_exit();
+    check(exit && mission == 0 && world_is_mission_complete(), "LASKIP: out %, mission %, complete %", exit, mission, world_is_mission_complete());
+} @test
+
+// Kyle's ship at the sewers' start is in the way: the O file puts unseen spirits with a
+// radius and height along its hull and wings, which the player walks into.
+sewers_ship_in_the_way :: () {
+    skip_without_dark();
+    if !start_level("SEWERS") return;
+    defer world_unload();
+    if !run(30, .{}) return;
+    if !place(185, 0, 116, 270) return;
+    if !run(150, .{forward = true}) return;
+    p := world_get_player();
+    check(p.position.x > 174 * FIXED_ONE, "walked into the hull to %", at(p));
+} @test
+
 #scope_file
 
 // Puts the player a distance in front of an object, facing it, a unit above its feet.
@@ -1980,6 +2125,10 @@ number_key :: (n: int) -> World_Input {
 
 launch :: (type: Projectile_Type, at: Fixed3, pitch_degrees: float, yaw_degrees: float) -> s32 {
     return world_launch_projectile(type, at, cast(s32) (pitch_degrees / 360.0 * 16384), cast(s32) (yaw_degrees / 360.0 * 16384));
+}
+
+type_cheat :: (keys: string) {
+    for cast([] u8) keys  world_type_cheat_key(it);
 }
 
 // Puts the player at a place facing a way; false if no sector holds it.

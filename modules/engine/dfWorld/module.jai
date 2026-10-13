@@ -77,6 +77,7 @@ run_frame :: (input: World_Input) {
     ticks := clock.tick - clock.frame_tick;
     clock.dt = cast(Fixed) min(((cast(s64) ticks) << 32) / 0x910000, 0x4000);
     clock.frame_tick = clock.tick;
+    pass_level_exit();
     update_automap(input);
     update_hud();
     world.tasks.input = input;
@@ -251,6 +252,7 @@ world_get_level_list :: () -> [] Level_Entry {
 #load "collision.jai";
 #load "visibility.jai";
 #load "automap.jai";
+#load "cheats.jai";
 #load "draw.jai";
 #load "bot.jai";
 #load "tasks.jai";
@@ -310,7 +312,8 @@ world: struct {
     goals: Level_Goals;
     mission_complete: bool;
     end_messages: End_Messages;
-    objects_collide := true;
+    cheat_typing: Cheat_Typing;     // cheats.jai
+    level_exit: Level_Exit;
     item_sounds: [4] Sound_Handle;
     // What Jabba's ship takes at the start, for the pile (0xfe244): the item slots and ammo.
     pile: struct {

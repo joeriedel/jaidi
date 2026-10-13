@@ -36,6 +36,10 @@ play: struct {
     active: bool;
     screen: Play_Screen;
     step: s32;                  // Into the order.
+    // The mission played (0xe51ec): the briefing and the level are its, while the cutscenes
+    // go by the step. They part only when a cheat goes to another mission.
+    mission: s32;
+    next_opened: bool;          // The mission complete has opened the next.
     esc: Esc_Phase;
     pda: bool;                  // The PDA in the Esc menu's place.
     fade_step: s32;             // 0 to 31 through a fade.
@@ -73,8 +77,9 @@ is_menu_shown :: () -> bool { return play.screen == .AGENT_MENU || play.screen =
 // Once a frame: on to the next step when the one shown is done.
 update_play :: (window: *SDL_Window, in_tools: *bool, running: *bool) {
     if !play.active {
-        // A level from the tools has the Esc menu too.
-        if game.playing  update_esc_menu(window, in_tools, running);
+        // A level from the tools has the Esc menu too; a cheat's way out goes back to them.
+        if game.playing && world_get_level_exit()  stop_level(window, in_tools);
+        else if game.playing  update_esc_menu(window, in_tools, running);
         return;
     }
     if play.screen == {
@@ -87,7 +92,7 @@ update_play :: (window: *SDL_Window, in_tools: *bool, running: *bool) {
             current_agent = menu_get_chosen_agent();
             menu_close();
             // Saved however the menu is left (0x189d8).
-            if result > 0  get_agent().selected = result;
+            if result > 0  set_current_mission(result);
             agents_save(*agents, get_agents_path());
             if result <= 0 { end_play(window, in_tools); return; }
             play.step = (result - 1) * 4;
@@ -107,6 +112,18 @@ update_play :: (window: *SDL_Window, in_tools: *bool, running: *bool) {
             play.step += 1;
             begin_step(window);
         case .LEVEL;
+            // Complete, the next mission is open at once (0x10867, 0x1999c), even if this
+            // one is then aborted.
+            if world_is_mission_complete() && !play.next_opened {
+                play.next_opened = true;
+                record := get_agent();
+                record.next = max(record.next, record.selected + 1);
+            }
+            exit, mission := world_get_level_exit();
+            if exit {
+                leave_level_by_cheat(window, in_tools, mission);
+                return;
+            }
             update_esc_menu(window, in_tools, running);
         case .NONE;
             begin_step(window);
@@ -315,7 +332,8 @@ open_agent_menu :: () {
         play.screen = .AGENT_MENU;
     } else {
         // Without the agent menu, the agent chosen plays from its mission.
-        play.step = (max(get_agent().selected, 1) - 1) * 4;
+        play.mission = max(get_agent().selected, 1);
+        play.step = (play.mission - 1) * 4;
         play.screen = .NONE;
     }
 }
@@ -342,7 +360,7 @@ begin_step :: (window: *SDL_Window) {
                     return;
                 }
             case .BRIEFING;
-                if menu_open_briefing(get_mission_name(step.mission), get_agent().difficulty, cutscene_get_frame_delay()) {
+                if menu_open_briefing(get_mission_name(play.mission), get_agent().difficulty, cutscene_get_frame_delay()) {
                     play.screen = .BRIEFING;
                     pause_music();
                     return;
@@ -350,10 +368,11 @@ begin_step :: (window: *SDL_Window) {
             case .MISSION;
                 // What the agent takes into it (0x1860d).
                 record := get_agent();
-                m := clamp(step.mission, 1, AGENT_MISSIONS) - 1;
+                m := clamp(play.mission, 1, AGENT_MISSIONS) - 1;
                 world_set_agent_inventory(record.items[m], record.stats[m]);
-                if start_level(window, get_mission_name(step.mission), false, record.difficulty) {
+                if start_level(window, get_mission_name(play.mission), false, record.difficulty) {
                     play.screen = .LEVEL;
+                    play.next_opened = false;
                     return;
                 }
         }
@@ -373,21 +392,41 @@ end_play :: (window: *SDL_Window, in_tools: *bool) {
     play.esc = .NONE;
 }
 
-// The mission done (0x10867, 0x1999c, 0x1980d, 0x184ba): kept as done at the difficulty
-// played, the next one open, the agents saved, and what the agent has now saved as what it
-// takes into the next.
+// The mission done (0x1980d, 0x184ba, 0x196ae): kept as done at the difficulty played, the
+// agents saved, what the agent has now saved as what it takes into the next, and the next
+// the one played.
 record_mission_done :: () {
     record := get_agent();
-    mission := get_step(play.step).mission;
+    mission := play.mission;
     if mission < 1 || mission > MISSION_COUNT return;
     record.completed[mission - 1] = record.difficulty;
-    record.next = max(record.next, record.selected + 1);
     if mission < MISSION_COUNT {
         items, stats := world_get_agent_inventory();
         record.items[mission] = items;
         record.stats[mission] = stats;
     }
     agents_save(*agents, get_agents_path());
+    set_current_mission(mission + 1);
+}
+
+// A mission chosen (0x196ae): the one played, and the agent's choice on the menu.
+set_current_mission :: (mission: s32) {
+    if mission < 1 || mission > MISSION_COUNT return;
+    play.mission = mission;
+    get_agent().selected = mission;
+}
+
+// A cheat's way out of the level (0x108eb, 0x108aa), taken as the main loop takes a
+// mission's end: complete, on past it; otherwise back an entry, to the briefing. A warp
+// makes its mission the one played first, so the briefing and the level are that one's while
+// the cutscenes keep to where the order was.
+leave_level_by_cheat :: (window: *SDL_Window, in_tools: *bool, mission: s32) {
+    if mission > 0  set_current_mission(mission);
+    complete := world_is_mission_complete();
+    if complete  record_mission_done();
+    stop_level(window, in_tools);
+    play.step += ifx complete then cast(s32) 1 else -1;
+    begin_step(window);
 }
 
 // The Esc menu's fades, a step a game tick (0x4ff50), and its answer.

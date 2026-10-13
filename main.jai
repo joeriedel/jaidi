@@ -237,6 +237,9 @@ main :: () {
                     }
                     if cutscene_is_playing() && is_cutscene_paused()  continue;
                     if game.playing && !key.repeat {
+                        // Every key goes to the cheat codes as well (cheats.jai): a
+                        // letter, digit or sign as itself, lower case, any other as 0.
+                        world_type_cheat_key(ifx key.key >= 0x21 && key.key <= 0x7E then cast(u8) key.key else 0);
                         if key.key == SDLK_ESCAPE  open_esc_menu();
                         else if key.key == SDLK_F1 { if play.active  open_pda(); }
                         // The goggles, cleats, mask and headlamp.

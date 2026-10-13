@@ -31,6 +31,7 @@ Generator :: struct {
 
     wait: Generator_Wait;
     wake: s32;                  // When the task runs next: -1 never.
+    polling: bool;              // Waiting for the AI to come back on (cheats.jai).
     task: *Task;
 }
 
@@ -91,7 +92,7 @@ unload_generators :: () {
 
 // Its task's turn (tasks.jai), if its time has come.
 update_generator :: (g: *Generator) {
-    if g.wake < 0 || g.wake > world.clock.tick return;
+    if !is_ai_task_due(*g.wake, *g.polling) return;
     run_generator(g, .RUN, -1);
 }
 
@@ -137,11 +138,11 @@ run_generator :: (g: *Generator, message: Generator_Message, object: s32) {
     }
 }
 
-// A yield (0x1d793): only a run of its own sets when the task runs next.
+// A yield (0x1d793): only a run of its own sets when the task runs next. Each of its waits
+// looks at the AI first, as 0x338c8 does (cheats.jai).
 wait_generator :: (g: *Generator, wait: Generator_Wait, ticks: s32, message: Generator_Message) {
     g.wait = wait;
-    if message != .RUN return;
-    g.wake = ifx ticks < 0 then -1 else world.clock.tick + ticks;
+    yield_ai_task(*g.wake, *g.polling, ticks, message != .RUN);
 }
 
 // A new object at the generator, facing at random; when the player is within range and can't

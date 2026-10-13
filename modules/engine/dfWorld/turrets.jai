@@ -25,6 +25,7 @@ Turret :: struct {
 
     wait: Turret_Wait;
     wake: s32;                  // When the task runs next: -1 never.
+    polling: bool;              // Waiting for the AI to come back on (cheats.jai).
     in_message: bool;
     task: *Task;
 }
@@ -74,7 +75,7 @@ unload_turrets :: () {
 
 // Its task's turn (tasks.jai), if its time has come.
 update_turret :: (t: *Turret) {
-    if t.wake < 0 || t.wake > world.clock.tick return;
+    if !is_ai_task_due(*t.wake, *t.polling) return;
     run_turret(t, 0);
 }
 
@@ -172,11 +173,11 @@ run_state :: (t: *Turret) {
     }
 }
 
-// A yield (0x338c8): only a run of its own sets when the task runs next.
+// A yield (0x338c8): only a run of its own sets when the task runs next, and the AI
+// switched off makes it a wait for it (cheats.jai).
 wait_turret :: (t: *Turret, wait: Turret_Wait, ticks: s32) {
     t.wait = wait;
-    if t.in_message return;
-    t.wake = ifx ticks < 0 then -1 else world.clock.tick + ticks;
+    yield_ai_task(*t.wake, *t.polling, ticks, t.in_message);
 }
 
 // Shots and blasts (0x34b1c, 0x34b84): under 8 hit points it spins, at none it blows up; then

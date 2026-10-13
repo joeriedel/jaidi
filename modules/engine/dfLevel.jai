@@ -163,6 +163,22 @@ level_find_sector :: (level: *Level, p: Fixed3) -> s32 {
     return best;
 }
 
+// The same by x and z alone, whatever the height (0x5a35c).
+level_find_sector_at_xz :: (level: *Level, x: Fixed, z: Fixed) -> s32 {
+    best: s32 = -1;
+    best_area: s32;
+    for * level.sectors {
+        lo, hi := it.bounds_min, it.bounds_max;
+        area := (((hi.z - lo.z) >> 16) + 1) * (((hi.x - lo.x) >> 16) + 1);
+        if x < lo.x || x > hi.x || z < lo.z || z > hi.z continue;
+        if !is_point_in_sector(it, x, z) continue;
+        if best >= 0 && best_area <= area continue;
+        best = xx it_index;
+        best_area = area;
+    }
+    return best;
+}
+
 // Whether (x, z) is inside the sector, its edges and corners counting as inside: crossings
 // of a ray toward +x, with the original's rules for corners and walls along x (0x5a044).
 is_point_in_sector :: (sector: *Sector, x: Fixed, z: Fixed) -> bool {

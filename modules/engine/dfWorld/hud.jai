@@ -201,6 +201,7 @@ draw_hud :: (screen_left := 0.0, screen_right := 320.0) {
     }
 
     if h.message  draw_hud_text(.GLOWING, screen_left + 4, 10, h.message);
+    if cheats.data  draw_hud_text(.GLOWING, screen_left + 164, 10, world_get_data_readout());
 }
 
 #scope_file

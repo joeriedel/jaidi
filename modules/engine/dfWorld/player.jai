@@ -90,6 +90,8 @@ world_get_camera :: () -> Vector3, s32, float, float {
 PLAYER_WIDTH  :Fixed: 0x1CCCC;      // 1.8
 PLAYER_HEIGHT :Fixed: 0x5CCCC;      // 5.8
 PLAYER_STEP   :Fixed: 0x38000;      // 3.5
+NO_STEP_LIMIT :Fixed: 0x270F0000;   // 9999, with the height check off.
+BUG_SIZE      :Fixed: 0x4CCC;       // 0.3: insect mode's width and least eye height.
 
 start_player :: () {
     p := *world.player;
@@ -316,8 +318,9 @@ update_physics :: (p: *Player) {
     vx := (((p.velocity.x << p.run) >> p.slow) >> p.on_moving_surface) << p.jump_scale;
     vz := (((p.velocity.z << p.run) >> p.slow) >> p.on_moving_surface) << p.jump_scale;
     p.move = .{mul16(vx, dt) + mul16(p.external.x, dt), mul16(vz, dt) + mul16(p.external.z, dt)};
-    p.step = PLAYER_STEP;
-    p.width = PLAYER_WIDTH;
+    // LAPOGO takes the step height off, LABUG makes the player small (0x2d17c).
+    p.step = ifx cheats.height_check then PLAYER_STEP else NO_STEP_LIMIT;
+    p.width = ifx cheats.bug then BUG_SIZE else PLAYER_WIDTH;
 
     // Up to four tries, each sliding along what the last hit.
     c := *world.collision;
@@ -430,7 +433,7 @@ update_physics :: (p: *Player) {
     room := max(p.position.y - highest, 0);
     room -= min(room, FIXED_ONE);
     room = min(room, PLAYER_HEIGHT);
-    min_eye := p.min_eye;
+    min_eye := ifx cheats.bug then BUG_SIZE else p.min_eye;
     second := world.level.sectors[p.sector].second_altitude;
     lowest_eye := ifx second < 0 then 0 else second + 0x4000;
     lowest_eye = max(lowest_eye, min_eye);
@@ -450,7 +453,8 @@ update_physics :: (p: *Player) {
         stop_sound(s.crush_sound);
         s.crush_sound = 0;
     }
-    p.max_move = (ifx p.in_water then WATER_MAX_MOVE else DRY_MAX_MOVE) - (PLAYER_HEIGHT - p.height) * 4;
+    // Not as an insect: it keeps the last.
+    if !cheats.bug  p.max_move = (ifx p.in_water then WATER_MAX_MOVE else DRY_MAX_MOVE) - (PLAYER_HEIGHT - p.height) * 4;
 
     // The head bob, by the walking speed: a cosine of the tick, and a slower sway for the
     // weapon.

@@ -226,6 +226,48 @@ world_count_view_frame :: () {
 
 #scope_module
 
+// LAPOSTAL (0x29ff8): health and shields, every weapon, the goggles, cleats and mask, full
+// ammo and battery. As every give below, it brings a dying player back to its feet, lying
+// down.
+give_weapons_and_ammo :: () {
+    restore_health_for_cheat();
+    for cast(s32) Item_Slot.PISTOL..cast(s32) Item_Slot.CANNON  agent.items[it] = -1;
+    agent.detonator_weapon, agent.mine_weapon = -1, -1;
+    for cast(s32) Item_Slot.GOGGLES..cast(s32) Item_Slot.MASK  agent.items[it] = -1;
+    for * agent.ammo  it.* = AMMO_MAX[it_index];
+    agent.battery = BATTERY_FULL;
+    reset_weapon_frame();
+}
+
+// LABRADY (0x29eb4): health and shields, and ammo for the weapons there are, the energy,
+// detonators and mines whatever; the battery.
+give_ammo :: () {
+    restore_health_for_cheat();
+    has :: (slot: Item_Slot) -> bool { return agent.items[slot] != 0; }
+    agent.ammo[Ammo.ENERGY] = AMMO_MAX[Ammo.ENERGY];
+    if has(.AUTOGUN) || has(.FUSION) || has(.CONCUSSION)  agent.ammo[Ammo.POWER] = AMMO_MAX[Ammo.POWER];
+    if has(.CANNON)  agent.ammo[Ammo.PLASMA] = AMMO_MAX[Ammo.PLASMA];
+    agent.ammo[Ammo.DETONATOR] = AMMO_MAX[Ammo.DETONATOR];
+    if has(.MORTAR)  agent.ammo[Ammo.SHELL] = AMMO_MAX[Ammo.SHELL];
+    agent.ammo[Ammo.MINE] = AMMO_MAX[Ammo.MINE];
+    if has(.CANNON)  agent.ammo[Ammo.MISSILE] = AMMO_MAX[Ammo.MISSILE];
+    agent.battery = BATTERY_FULL;
+    reset_weapon_frame();
+}
+
+// LAUNLOCK (0x29f70): the keys, the goggles, cleats and mask, and every mission item and
+// code, without a word to the goals.
+give_inventory :: () {
+    for cast(s32) Item_Slot.RED_KEY..ITEM_SLOTS-1  agent.items[it] = -1;
+}
+
+restore_health_for_cheat :: () {
+    agent.health = HEALTH_MAX;
+    agent.health_fraction = 0;
+    world.player_state.dying = false;
+    agent.shields = SHIELDS_MAX;
+}
+
 // The agent file's item bytes, in order, by Item_Slot; -1 and -2 for the thrown weapons.
 INVENTORY_SLOTS :: s32.[1, 2, -1, 3, 4, 5, -2, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 18, 16, 17, 19,
                         20, 21, 22, 23, 24, 25, 26, 27, 28];

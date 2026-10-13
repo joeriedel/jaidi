@@ -27,6 +27,7 @@ Mousebot :: struct {
 
     wait: Mousebot_Wait;
     wake: s32;                  // When the task runs next: -1 never.
+    polling: bool;              // Waiting for the AI to come back on (cheats.jai).
     in_message: bool;
     task: *Task;
 }
@@ -87,7 +88,7 @@ unload_mousebots :: () {
 
 // Its task's turn (tasks.jai), if its time has come.
 update_mousebot :: (b: *Mousebot) {
-    if b.wake < 0 || b.wake > world.clock.tick return;
+    if !is_ai_task_due(*b.wake, *b.polling) return;
     run_mousebot(b, 0);
 }
 
@@ -164,11 +165,11 @@ run_state :: (b: *Mousebot) {
     }
 }
 
-// A yield (0x338c8): only a run of its own sets when the task runs next.
+// A yield (0x338c8): only a run of its own sets when the task runs next, and the AI
+// switched off makes it a wait for it (cheats.jai).
 wait_mousebot :: (b: *Mousebot, wait: Mousebot_Wait, ticks: s32) {
     b.wait = wait;
-    if b.in_message return;
-    b.wake = ifx ticks < 0 then -1 else world.clock.tick + ticks;
+    yield_ai_task(*b.wake, *b.polling, ticks, b.in_message);
 }
 
 // Shots (0x3ae64) and blasts (0x3aecc): hurt, it squeaks; killed, it dies, and the message

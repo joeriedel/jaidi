@@ -465,7 +465,8 @@ find_collision :: (c: *Collision, sector_index: s32, ignore: bool) -> bool {
 // The original keeps the player among its sector's objects, so others meet it too; here
 // it's looked at after them.
 find_object_collision :: (c: *Collision, sector: s32) -> bool {
-    if !world.objects_collide return false;
+    // Nothing is in the way with the AI off (LAREDLITE).
+    if !cheats.ai return false;
     for index: walk_sector(sector) {
         o := world.objects[index];
         if o.flags & OBJECT_PICKUP || !o.width continue;

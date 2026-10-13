@@ -42,6 +42,9 @@ Vue_Logic :: struct {
     find_sector: bool;
     sector: s32 = -1;
     ran_frame: s32 = -1;            // The frame tick it last ran on.
+    // With the AI off its yields wait for it to come back on (cheats.jai).
+    wake: s32;
+    polling: bool;
 }
 
 // Objects with LOGIC: KEY and a VUE: get a path. Each KEY has its task, asleep for good
@@ -82,6 +85,12 @@ update_vue :: (index: s32) {
     if index < 0 return;
     v := *world.vues[index];
     if v.ran_frame == world.clock.frame_tick return;
+    if v.polling {
+        // The AI back on, the wait it was at returns as a message would, so a paused path
+        // goes on too.
+        if is_ai_task_due(*v.wake, *v.polling)  run_vue(v);
+        return;
+    }
     if v.state == .WOKEN || v.state == .SHOWN || v.state == .START  run_vue(v);
 }
 
@@ -89,16 +98,17 @@ update_vue :: (index: s32) {
 // objects on paths, whose task takes any message as a call to go on.
 wake_sector_objects :: (sector: s32) {
     for index: walk_sector(sector) {
-        for * world.vues  if it.object == index { run_vue(it); break; }
+        for * world.vues  if it.object == index { run_vue(it, in_message = true); break; }
         actor := world.objects[index].actor;
         if actor  send_actor_message(actor, .WAKEUP);
     }
 }
 
-// The original's task (0x301c6), from where it last yielded.
-run_vue :: (v: *Vue_Logic) {
+// The original's task (0x301c6), from where it last yielded, to where it yields next.
+run_vue :: (v: *Vue_Logic, in_message := false) {
     v.ran_frame = world.clock.frame_tick;
     tick := world.clock.tick;
+    defer yield_ai_task(*v.wake, *v.polling, 0, in_message);
     if v.state == {
         case .EMPTY;
             return;
