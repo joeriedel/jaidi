@@ -1,6 +1,15 @@
 jaidi changelog
 ===============
 
+0.2.4 (2026-10-14)
+------------------
+
+A drawing fix in levels.
+
+- Fixed: rendering bug on Jabba's ship.
+
+Still missing: settings and configuration screens.
+
 0.2.3 (2026-10-14)
 ------------------
 

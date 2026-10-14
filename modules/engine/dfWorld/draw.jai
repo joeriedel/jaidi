@@ -412,6 +412,12 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
     above_walls: [..] Piece;
     above_walls.allocator = temp;
 
+    // Solid walls aren't cut by the opening's plane, only by the window, as the original
+    // draws any wall reaching past the opening's nearer end by its columns: a sliver beside
+    // the opening can lie wholly on the camera's side of it (JABSHIP's sector 348 seen from
+    // 347's notch). They can't open anything, so the plane isn't needed for them.
+    render_set_clip_plane(NO_CLIP);
+
     for * wall: sector.walls {
         a, b := to_vector(sector.vertices[wall.left]), to_vector(sector.vertices[wall.right]);
         if !is_facing(c, a, b) || !is_in_columns(c, a, b, left, right) || is_nearer(c, a, b, min_z) continue;
@@ -442,7 +448,9 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
             top := piece;
             top.top, top.bottom = to_float(sector.ceiling.altitude), to_float(next.ceiling.altitude);
             if exterior && (next.flags[0] & SECTOR_EXTERIOR_ADJ) {
+                render_set_clip_plane(clip);
                 draw_sky_piece(c, top, sector.ceiling, level);
+                render_set_clip_plane(NO_CLIP);
             } else {
                 draw_piece(c, top, wall.top, flip, false);
                 if wall.sign.texture >= 0 && !has_bottom  draw_sign(c, top, wall.top, wall.sign, illuminated, switch_state);
@@ -452,7 +460,9 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
             bottom := piece;
             bottom.top, bottom.bottom = to_float(next.floor.altitude), to_float(sector.floor.altitude);
             if pit && (next.flags[0] & SECTOR_PIT_ADJ) {
+                render_set_clip_plane(clip);
                 draw_sky_piece(c, bottom, sector.floor, level);
+                render_set_clip_plane(NO_CLIP);
             } else {
                 draw_piece(c, bottom, wall.bottom, flip, false);
                 if wall.sign.texture >= 0  draw_sign(c, bottom, wall.bottom, wall.sign, illuminated, switch_state);
@@ -547,8 +557,8 @@ is_nearer :: (c: *Camera, a: Vector2, b: Vector2, min_z: float) -> bool {
 // it so what lies on the plane still shows: nothing on the camera's side of an opening can
 // be seen through it, whatever the walls and openings beyond do there (Test Base's bay seen
 // through a notch it opens back into, which rounding would let open again over the bay).
-// Objects aren't cut (draw_sector): one standing in an opening reaches across it, and the
-// original draws it whole there. With the camera in the opening's plane, it sees past it
+// Objects and solid walls aren't cut (draw_sector): one standing in an opening reaches across
+// it, and the original draws it whole there. With the camera in the opening's plane, it sees past it
 // all round, so nothing is cut.
 get_opening_clip :: (c: *Camera, level: s32) -> Clip_Plane {
     if level == 0 return NO_CLIP;
