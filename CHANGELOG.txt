@@ -1,6 +1,17 @@
 jaidi changelog
 ===============
 
+0.2.2 (2026-10-13)
+------------------
+
+Two drawing fixes in levels.
+
+- Fixed: mines and bodies lying on the floor showed with their bottoms cut flat.
+- Enhanced mode: floors and ceilings of rotating sectors now turn with them (like the
+  catwalk in the Research Facility). Original mode leaves them fixed, as the original game does.
+
+Still missing: settings and configuration screens.
+
 0.2.1 (2026-10-13)
 ------------------
 

@@ -298,7 +298,11 @@ draw_sky_window :: (c: *Camera, flat: Flat, level: s32) {
 // x), or as sky: the plane where the window shows it, the window's corners cast onto it. The
 // stencil cuts it to the sector's pixels within that; drawing the whole plane would have the
 // GPU test most of the screen for every sector.
-draw_flat :: (c: *Camera, flat: Flat, sky: bool, level: s32, window: Window) {
+//
+// The original can't turn a flat: a sector turned by morph_spin turns under a texture fixed
+// in the world. Enhanced turns the texture with a sector whose every wall turns, so it rides
+// the floor.
+draw_flat :: (c: *Camera, sector_index: s32, flat: Flat, sky: bool, level: s32, window: Window) {
     image, _ := get_texture(flat.texture);
     if !image return;
     y := to_float(flat.altitude);
@@ -319,6 +323,13 @@ draw_flat :: (c: *Camera, flat: Flat, sky: bool, level: s32, window: Window) {
     } else {
         color = render_pack_color(.TEXTURE_DEPTH) | FLAT_ADDRESSING;
     }
+    turn := world.inf.turns[sector_index];
+    turned := c.smooth && !sky && turn.turned && turn.angle != 0;
+    tc, ts: float;
+    if turned {
+        a := turn.angle / 16384.0 * PI * 2;
+        tc, ts = cos(a), sin(a);
+    }
     corners: [33] Render_Vertex;
     for 0..seen.count-1 {
         ray := unproject(c, seen.points[it], 1);
@@ -326,7 +337,16 @@ draw_flat :: (c: *Camera, flat: Flat, sky: bool, level: s32, window: Window) {
         // Back from view space to the world.
         p := Vector3.{c.eye.x + v.x * c.cos + v.z * c.sin, y, c.eye.z - v.x * c.sin + v.z * c.cos};
         uv: Vector2;
-        if !sky  uv = .{(to_float(flat.offset.x) - p.x) * 8, (p.z - to_float(flat.offset.z)) * 8};
+        if !sky {
+            // Where the point was before the turn: turned back about the center (turn_walls).
+            q := Vector2.{p.x, p.z};
+            if turned {
+                o := to_vector(turn.center);
+                x, z := q.x - o.x, q.y - o.y;
+                q = .{x * tc + z * ts + o.x, z * tc - x * ts + o.y};
+            }
+            uv = .{(to_float(flat.offset.x) - q.x) * 8, (q.y - to_float(flat.offset.z)) * 8};
+        }
         corners[it] = vertex(c, p, uv, 0, color);
     }
     render_set_image(image);
@@ -444,6 +464,7 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
     // it covered.
     render_set_clip_plane(NO_CLIP);
     draw_objects(c, sector_index, level);
+    render_set_world_draw(.GEOMETRY, xx level);
     render_set_clip_plane(clip);
 
     for * wall, wall_index: sector.walls {
@@ -513,8 +534,8 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
     // plane is seen only from its side.
     if above_walls  draw_stencil_pieces(c, above_walls, .WALL_MARK, level | STENCIL_ABOVE_WALL);
     render_set_lighting(get_lighting(c, sector));
-    if !exterior && c.eye.y > to_float(sector.ceiling.altitude)  draw_flat(c, sector.ceiling, false, level, window);
-    if c.eye.y < to_float(sector.floor.altitude)    draw_flat(c, sector.floor, pit, level, window);
+    if !exterior && c.eye.y > to_float(sector.ceiling.altitude)  draw_flat(c, sector_index, sector.ceiling, false, level, window);
+    if c.eye.y < to_float(sector.floor.altitude)    draw_flat(c, sector_index, sector.floor, pit, level, window);
 }
 
 // Both ends nearer than min_z.
@@ -685,9 +706,11 @@ clip_window :: (poly: Window, p: Vector2, q: Vector2, window: Window) -> Window 
 // Objects ----------------------------------------------------------------------------------
 
 // In the order they're listed: the depth buffer sorts them, and their transparent texels
-// are discarded rather than blended.
+// are discarded rather than blended. They mark the stencil where they show, so the sector's
+// floor and ceiling, drawn later, don't cut what reaches into them (a body or a mine lying on
+// the floor): the original clips objects to their sector's window alone (0x506a0).
 draw_objects :: (c: *Camera, sector_index: s32, level: s32) {
-    render_set_world_draw(.GEOMETRY, xx level);
+    render_set_world_draw(.OBJECT, xx (level | STENCIL_DRAWN));
     for object: walk_sector(sector_index) {
         if is_on_vue_path(object) {
             // Once, though the sector may be seen through more than one opening.

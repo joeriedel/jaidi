@@ -196,6 +196,12 @@ Teleport :: struct {
     yaw: s32;
 }
 
+Sector_Turn :: struct {
+    angle: s32;
+    center: Fixed2;
+    turned: bool;
+}
+
 Inf_State :: struct {
     elevators: [..] Elevator;
     triggers: [..] Trigger;
@@ -205,6 +211,8 @@ Inf_State :: struct {
     wall_links: [..] [..] s32;      // By wall_first[sector] + wall.
     wall_first: [..] s32;
     original_vertices: [..] [..] Fixed2;    // Where rotating walls turn from.
+    turns: [..] Sector_Turn;        // By sector: how far a sector whose every wall turns has
+                                    // turned, for Enhanced Mode's flats (draw_flat).
     player_walls_moved: bool;   // A wall of the player's sector moved (0xfe374).
 
     // The message being handled, as the original's globals carry it.
@@ -242,6 +250,7 @@ load_inf :: () {
     array_resize(*inf.wall_links, walls);
     array_resize(*inf.original_vertices, sector_count);
     for * world.level.sectors  array_copy(*inf.original_vertices[it_index], it.vertices);
+    array_resize(*inf.turns, sector_count);
 
     // The default sounds (0x34c30, 0x374e0).
     s := *inf.sounds;
@@ -292,6 +301,7 @@ unload_inf :: () {
     array_free(inf.wall_links);
     array_free(inf.wall_first);
     array_free(inf.original_vertices);
+    array_free(inf.turns);
     inf.* = .{};
 }
 
@@ -1205,6 +1215,9 @@ turn_walls :: (sector_index: s32, angle: s32, center: Fixed2) {
         update_wall_and_previous(sector, w);
         if sector_index == world.player.sector  world.inf.player_walls_moved = true;
     }
+    whole := true;
+    for * w: sector.walls  if !(w.flags[0] & WALL_MORPHS)  whole = false;
+    if whole  world.inf.turns[sector_index] = .{angle, center, true};
     for * w: sector.walls {
         if !(w.flags[0] & WALL_MORPHS) continue;
         turn(sector_index, w, c, s, center);

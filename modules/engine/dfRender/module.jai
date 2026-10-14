@@ -136,12 +136,12 @@ render_init :: (device: *SDL_GPUDevice) -> bool {
     if !renderer.triangles || !renderer.points || !renderer.resolve || !renderer.film || !renderer.film_resolve || !renderer.film_rgb || !renderer.film_output return false;
     for * renderer.world_pipelines {
         kind := cast(World_Draw) it_index;
-        it.* = create_scene_pipeline(ifx kind == .POINTS then points_vert else scene_vert, scene_frag, ifx kind == .POINTS then .POINTLIST else .TRIANGLELIST, kind);
+        it.* = create_scene_pipeline(ifx is_points(kind) then points_vert else scene_vert, scene_frag, ifx is_points(kind) then .POINTLIST else .TRIANGLELIST, kind);
         if !it.* return false;
     }
     for * renderer.world_rgb_pipelines {
         kind := cast(World_Draw) it_index;
-        it.* = create_scene_pipeline(ifx kind == .POINTS then points_vert else scene_vert, scene_rgb_frag, ifx kind == .POINTS then .POINTLIST else .TRIANGLELIST, kind, .R16G16B16A16_FLOAT);
+        it.* = create_scene_pipeline(ifx is_points(kind) then points_vert else scene_vert, scene_rgb_frag, ifx is_points(kind) then .POINTLIST else .TRIANGLELIST, kind, .R16G16B16A16_FLOAT);
         if !it.* return false;
     }
 
@@ -680,7 +680,8 @@ make_lighting_uniform :: (l: Lighting) -> Lighting_Uniform {
 add_vertices :: (vertices: [] Render_Vertex, points: bool) {
     if !vertices || !renderer.passes return;
     last := ifx renderer.batches.count > renderer.passes[renderer.passes.count - 1].first_batch then *renderer.batches[renderer.batches.count - 1] else null;
-    world_draw := ifx points then World_Draw.POINTS else renderer.world_draw;
+    world_draw := renderer.world_draw;
+    if points  world_draw = ifx world_draw == .OBJECT then World_Draw.OBJECT_POINTS else .POINTS;
     if !last || last.image != renderer.image || last.points != points || last.world_draw != world_draw || last.stencil != renderer.stencil || memcmp(*last.clip, *renderer.clip, size_of(Clip_Plane)) != 0
        || memcmp(*last.lighting, *renderer.lighting, size_of(Lighting)) != 0 || memcmp(*last.sky, *renderer.sky, size_of(Sky)) != 0 {
         last = array_add(*renderer.batches);

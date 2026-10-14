@@ -18,7 +18,8 @@
 // level of the deepest open portal over them, so the next level is exactly the one opening.
 //
 // The stencil: the level in the low bits, ABOVE_WALL and DRAWN above them, which only FLAT
-// tests. WALL_MARK sets ABOVE_WALL over a sky sector's walls, up from their tops, so the
+// tests. OBJECT sets DRAWN where an object shows, so its sector's floor and ceiling leave it
+// whole, as the original clips objects only to their sector's window (0x506a0). WALL_MARK sets ABOVE_WALL over a sky sector's walls, up from their tops, so the
 // floor and ceiling don't show past the walls when the eye is above them; the sector's
 // RESTORE, or the end of the frame, clears it.
 //
@@ -28,6 +29,8 @@ World_Draw :: enum u8 {
     NONE;
     GEOMETRY;           // Walls, sky, objects: in the current level's pixels.
     POINTS;             // GEOMETRY as points (3D objects drawn by their vertices).
+    OBJECT;             // GEOMETRY, DRAWN set where it's drawn: a sector's objects.
+    OBJECT_POINTS;      // OBJECT as points.
     SKY;                // GEOMETRY without writing depth: the original's sky never hides
                         // what's drawn after it.
     FLAT;               // GEOMETRY but not in DRAWN or ABOVE_WALL: floors and ceilings.
@@ -84,6 +87,10 @@ render_begin_overlay :: (screen_width: float, screen_height: float, x: float, y:
 
 #scope_module
 
+is_points :: (kind: World_Draw) -> bool {
+    return kind == .POINTS || kind == .OBJECT_POINTS;
+}
+
 set_world_pipeline_state :: (info: *SDL_GPUGraphicsPipelineCreateInfo, color: *SDL_GPUColorTargetDescription, kind: World_Draw) {
     info.target_info.depth_stencil_format = renderer.stencil_format;
     ds := *info.depth_stencil_state;
@@ -102,6 +109,12 @@ set_world_pipeline_state :: (info: *SDL_GPUGraphicsPipelineCreateInfo, color: *S
         case .POINTS;
             ds.compare_op = .GREATER_OR_EQUAL;
             ds.enable_depth_write = true;
+        case .OBJECT; #through;
+        case .OBJECT_POINTS;
+            ds.compare_op = .GREATER_OR_EQUAL;
+            ds.enable_depth_write = true;
+            ds.write_mask = STENCIL_DRAWN;
+            stencil.pass_op = .REPLACE;
         case .SKY;
             ds.compare_op = .GREATER_OR_EQUAL;
             ds.enable_depth_write = false;
@@ -143,7 +156,7 @@ set_world_pipeline_state :: (info: *SDL_GPUGraphicsPipelineCreateInfo, color: *S
     ds.front_stencil_state = stencil;
     ds.back_stencil_state  = stencil;
 
-    if kind != .GEOMETRY && kind != .POINTS && kind != .SKY && kind != .FLAT && kind != .FLAT_SKY && kind != .OVERLAY {
+    if kind != .GEOMETRY && kind != .POINTS && kind != .OBJECT && kind != .OBJECT_POINTS && kind != .SKY && kind != .FLAT && kind != .FLAT_SKY && kind != .OVERLAY {
         color.blend_state.enable_color_write_mask = true;
         color.blend_state.color_write_mask = 0;
     }
