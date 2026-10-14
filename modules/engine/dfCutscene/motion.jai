@@ -608,7 +608,67 @@ hold_degenerate_sequences :: (batch: *Motion_Batch) {
         for * fits  if get_root(it_index) == root  it.held = true;
     }
     for * fits  if it.residual > DEGENERATE_PAIR  it.held = true;
+
+    // An in-between can be poor even so, showing what moves twice: a warp better than holding
+    // still that leaves much unexplained (gromas1's ship turning on its asteroid while the
+    // camera moves, which a zoom and shift can't follow), or a crossfade between frames that
+    // differ much (robotx's ship coming at the camera). Such pairs of a picture large enough for
+    // it to show are held as the original's frames. A pair between two held ones in its
+    // sequence is held too, so a run steps through rather than alternating.
+    poor := NewArray(fits.count, bool,, temp);
+    for fits {
+        a, b := batch.frames[it.from].extent, batch.frames[it.to].extent;
+        size := max(a.right - a.left, a.bottom - a.top, b.right - b.left, b.bottom - b.top);
+        left := ifx it.good then it.residual else it.still;
+        poor[it_index] = !it.held && left > POOR_FIT && size > POOR_FIT_SIZE;
+    }
+    for * fit, i: fits {
+        held := poor[i];
+        if !held && !fit.held {
+            before, after := false, false;
+            for fits {
+                if it.to == fit.from && it_index != i && poor[it_index]  before = true;
+                if it.from == fit.to && it_index != i && poor[it_index]  after = true;
+            }
+            held = before && after;
+        }
+        if held  fit.held = true;
+    }
+
+    // A camera move a zoom and shift follow well overall can still carry along a small thing
+    // moving its own way, which then slides back at every step (gromas1's ship over its
+    // asteroid): seen in the worst explained block of the picture. Where that shows in over a
+    // quarter of a sequence's warped pairs, the whole sequence is held, rather than some.
+    local_poor := NewArray(fits.count, bool,, temp);
+    for fits {
+        if !it.good || it.held continue;
+        from, to := *batch.frames[it.from], *batch.frames[it.to];
+        a, b := from.extent, to.extent;
+        if max(a.right - a.left, a.bottom - a.top, b.right - b.left, b.bottom - b.top) <= POOR_FIT_SIZE continue;
+        fa := make_field(from, *batch.palette);
+        fb := make_field(to, *batch.palette);
+        local_poor[it_index] = get_worst_block_error(*fa, *fb, it.zoom, it.shift) > POOR_BLOCK;
+    }
+    for root: 0..fits.count-1 {
+        if get_root(root) != root continue;
+        warped, poor_count := 0, 0;
+        for fits  if get_root(it_index) == root && it.good && !it.held {
+            warped += 1;
+            if local_poor[it_index]  poor_count += 1;
+        }
+        if !warped || poor_count * 4 <= warped continue;
+        for * fits  if get_root(it_index) == root  it.held = true;
+    }
 }
+
+// Good fits leave 0.002 to 0.07, gromas1's doubled ship 0.12 to 0.43; talking heads'
+// crossfades change 0.001, robotx's ship 0.1 to 0.28. In pixels, the larger side of either
+// frame: a sprite a few pixels across leaves up to about 0.2 fitted well.
+POOR_FIT      :: 0.1;
+POOR_FIT_SIZE :: 40;
+// A block a fit leaves nearly all unexplained (of 1); good camera moves' worst blocks mostly
+// stay under 0.2.
+POOR_BLOCK    :: 0.9;
 
 // Not when holding still couldn't be compared either: then nothing was measured.
 is_good_fit :: (residual: float, still: float) -> bool {
@@ -808,6 +868,33 @@ get_error :: (a: *Field, b: *Field, zoom: float, shift: Vector2, sampling: s32) 
     }
     if skipped * 2 >= visited return 1;
     return error / max(energy, 0.000001);
+}
+
+// The worst explained part of the second frame: of its blocks of BLOCK texels with a quarter
+// of the average block's energy or more, the largest share the motion leaves unexplained.
+get_worst_block_error :: (a: *Field, b: *Field, zoom: float, shift: Vector2) -> float {
+    BLOCK :: 16;
+    across := (b.width + BLOCK - 1) / BLOCK;
+    down := (b.height + BLOCK - 1) / BLOCK;
+    error := NewArray(across * down, float,, temp);
+    energy := NewArray(across * down, float,, temp);
+    for y: 0..b.height-1  for x: 0..b.width-1 {
+        ax, ay := (b.left + x + 0.5 - shift.x) / zoom, (b.top + y + 0.5 - shift.y) / zoom;
+        if is_past_cut(a, ax, ay) continue;
+        vb := b.values[y * b.width + x];
+        va := sample_field(a, ax, ay);
+        i := (y / BLOCK) * across + x / BLOCK;
+        error[i] += (vb - va) * (vb - va);
+        energy[i] += vb * vb + va * va;
+    }
+    total: float;
+    count: s32;
+    for energy  if it > 0 { total += it; count += 1; }
+    if !count return 0;
+    least := total / count / 4;
+    worst: float;
+    for energy  if it >= least  worst = max(worst, error[it_index] / it);
+    return worst;
 }
 
 is_past_cut :: (f: *Field, x: float, y: float) -> bool {

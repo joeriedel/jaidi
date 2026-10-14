@@ -1,6 +1,27 @@
 jaidi changelog
 ===============
 
+0.2.3 (2026-10-14)
+------------------
+
+Better Enhanced cinematics, and a fix to dying.
+
+- Enhanced mode: wipes, slides and fades between cinematic shots now fill the wide
+  screen, instead of dropping back to the 4:3 picture while they run.
+- Enhanced mode: a few shots stay at 4:3 where filling the wide screen would cut off
+  heads or subtitles (Mohc and Vader at Madine's office, the Jabba pit, the award
+  ceremony). The rest still fill it.
+- Enhanced mode: backgrounds behind a widened shot now widen with it (the hall at the
+  start of the Madine cinematic no longer stops short of the right edge).
+- Enhanced mode: smooth motion between a cinematic's frames now falls back to the
+  original frames where it can't follow the art, instead of showing doubled or smeared
+  pictures (the ship after the Research Facility, the explosion ring in the Robotics
+  Facility cinematic, the guard at the Jabba pit).
+- Enhanced mode: fixed a thin light line along the edges of talking heads, such as Mohc's.
+- Fixed: you could still fire and use things while dying.
+
+Still missing: settings and configuration screens.
+
 0.2.2 (2026-10-13)
 ------------------
 

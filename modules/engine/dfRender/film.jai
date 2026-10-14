@@ -246,14 +246,19 @@ render_film_resolve_fade :: (from: *Film_Image, output: *Film_Output, source: *P
 // space: 'fraction' of the way from the first image toward black, from black toward the second,
 // or from the first toward the second. With dither, an ordered dither against banding; with
 // sharpen, FSR 1's contrast-adaptive sharpening, 'sharpness' stops below its strongest.
-render_film_output :: (first: *Film_Image, second: *Film_Image, output: *Film_Output, fade: Film_Fade, fraction: float, dither: bool, sharpen := false, sharpness: float = 0.2) {
+// With 'wiping', a screen wipe or slide instead: the second image inside the rectangle 'wipe'
+// (left, top, right, bottom, in output pixels), moved by 'shift', over the first; then a fade
+// to or from black of the two together.
+render_film_output :: (first: *Film_Image, second: *Film_Image, output: *Film_Output, fade: Film_Fade, fraction: float, dither: bool, sharpen := false, sharpness: float = 0.2, wiping := false, wipe: [4] float = .[0, 0, 0, 0], shift: [2] float = .[0, 0]) {
     op := array_add(*renderer.film_ops);
     op.kind   = .OUTPUT;
     op.image  = first.texture;
     op.palettes = .[second.texture, null];
     op.target = output.color;
-    op.params = .[xx fade, xx dither, xx (sharpen && film_sharpen), 0];
+    op.params = .[xx fade, xx dither, xx (sharpen && film_sharpen), xx wiping];
     op.params_f = .[fraction, sharpness, 0, 0];
+    op.quad = wipe;
+    op.uv = .[shift[0], shift[1], 0, 0];
 }
 
 // Reads an image's indices back, waiting for the GPU: for checks, not every frame. Call after
@@ -421,8 +426,8 @@ run_film_ops :: (command_buffer: *SDL_GPUCommandBuffer) {
             textures[0] = .{texture = op.image, sampler = renderer.sampler};
             textures[1] = .{texture = ifx op.palettes[0] then op.palettes[0] else op.image, sampler = renderer.sampler};
             SDL_BindGPUFragmentSamplers(pass_out, 0, textures.data, 2);
-            uniform: struct { params: [4] s32; params_f: [4] float; };
-            uniform.params, uniform.params_f = op.params, op.params_f;
+            uniform: struct { params: [4] s32; params_f: [4] float; wipe: [4] float; shift: [4] float; };
+            uniform.params, uniform.params_f, uniform.wipe, uniform.shift = op.params, op.params_f, op.quad, op.uv;
             SDL_PushGPUFragmentUniformData(command_buffer, 0, *uniform, size_of(type_of(uniform)));
             SDL_DrawGPUPrimitives(pass_out, 3, 1, 0, 0);
             SDL_EndGPURenderPass(pass_out);

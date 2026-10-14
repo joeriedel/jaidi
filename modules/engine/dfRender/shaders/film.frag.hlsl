@@ -44,7 +44,8 @@
 // Output (built with OUTPUT), for Enhanced: one or two linear images into the 8-bit sRGB
 // image shown, with a color fade applied in gamma space as the original's DAC fades were:
 // the first image toward black, black toward the second, or the first toward the second
-// (each drawn through its own palette). An ordered dither while fading.
+// (each drawn through its own palette). An ordered dither while fading. Or a screen wipe:
+// the second (the new picture) inside a rectangle over the first (the old).
 
 #define MODE_DELT         0
 #define MODE_CRAWL        1
@@ -109,9 +110,11 @@ Texture2D<float4> first  : register(t0, space2);   // Linear, RGBA16F.
 Texture2D<float4> second : register(t1, space2);
 
 cbuffer Output : register(b0, space3) {
-    int4   output_params;   // Fade mode, dither on, sharpen on.
+    int4   output_params;   // Fade mode, dither on, sharpen on, wiping.
     float4 fraction;        // How far the fade has come, 0 to 1; how much to sharpen, in stops
                             // below full (0 sharpest).
+    float4 wipe;            // Wiping: where the second shows, in output pixels,
+    float4 shift;           // moved by this.
 };
 
 // FSR 1's contrast-adaptive sharpening (RCAS), in gamma space: the pixel pushed away from its
@@ -141,7 +144,16 @@ float4 main(float4 position : SV_Position) : SV_Target0 {
     int2 at = int2(position.xy);
     float f = fraction.x;
     float3 color = load_output(first, at);
-    if      (output_params.x == FADE_TO_MONO)   color = color * (1.0 - f);
+    if (output_params.w != 0) {
+        // The new picture over the old, its edges softened over one output pixel, as they
+        // move by fractions of one; then the fade, both drawn through its palette.
+        float2 p = position.xy;
+        float inside = saturate(min(min(p.x - wipe.x, wipe.z - p.x), min(p.y - wipe.y, wipe.w - p.y)) + 0.5);
+        if (inside > 0) color = lerp(color, load_output(second, int2(floor(p - shift.xy))), inside);
+        if      (output_params.x == FADE_TO_MONO)   color *= 1.0 - f;
+        else if (output_params.x == FADE_FROM_MONO) color *= f;
+    }
+    else if (output_params.x == FADE_TO_MONO)   color = color * (1.0 - f);
     else if (output_params.x == FADE_FROM_MONO) color = load_output(second, at) * f;
     else if (output_params.x == FADE_PALETTE)   color = lerp(color, load_output(second, at), f);
     if (output_params.y != 0) color += get_dither(position.xy);
@@ -398,6 +410,10 @@ float4 sample_outline(Texture2D<float4> tex, float2 p, int2 size, float2 footpri
     float coverage = 0;
     float2 slope = 0;
     float4 sum = 0;
+    // Whether coverage changes only across x, or only down y: a straight edge along the texels.
+    bool across = true, down = true;
+    float first_row[4];
+    float first_column = 0;
     for (int j = 0; j < 4; j++) {
         for (int i = 0; i < 4; i++) {
             float4 c = load_texel(tex, o + int2(i, j), size);
@@ -405,10 +421,20 @@ float4 sample_outline(Texture2D<float4> tex, float2 p, int2 size, float2 footpri
             coverage += wx[i] * wy[j] * k;
             slope += float2(sx[i] * wy[j], wx[i] * sy[j]) * k;
             sum += wx[i] * wy[j] * c;
+            if (j == 0) first_row[i] = k;
+            else if (k != first_row[i]) across = false;
+            if (i == 0) first_column = k;
+            else if (k != first_column) down = false;
         }
     }
     float soft = 0.5 * length(slope * footprint) + 0.0001;
     float edge = saturate((coverage - 0.5) / (2.0 * soft) + 0.5);
+    // A straight edge along the texels is kept hard, cut at the texel boundary, as the
+    // original draws it: that's where a patch meets the art it was cut from (a talking head
+    // on its body), and two edges softened there both let through what's behind.
+    if ((across || down) && coverage > 0.0001 && coverage < 0.9999) {
+        edge = load_texel(tex, int2(floor(p)), size).a > 0.5 ? 1.0 : 0.0;
+    }
     if (edge <= 0) return 0;
     float4 e;
     if (filter == 0) {

@@ -76,6 +76,14 @@ audio_pause :: (paused: bool) {
     }
 }
 
+// Music and digital sounds played faster (and higher), as a tape wound on: iMUSE ticks by the
+// samples made, so the music's timing keeps up. For the tools' fast-forward.
+audio_set_speed :: (ratio: float) {
+    for stream: (*SDL_AudioStream).[music_stream, digital_stream] {
+        if stream  SDL_SetAudioStreamFrequencyRatio(stream, ratio);
+    }
+}
+
 audio_set_music_volume :: (gain: float) {
     if music_stream SDL_SetAudioStreamGain(music_stream, gain);
 }

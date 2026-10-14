@@ -51,17 +51,51 @@ cutscene_start :: (id: s32, now: u64) -> bool {
 // goes on from there; the music carries on. The scene starts as a cutscene does, not as the
 // scene before it left the screen and the palette. Returns where the cutscene then is on the
 // clock cutscene_update gets, for the caller to carry on from; false when the scene can't
-// play.
+// play. A cell past the film's last is its last.
 cutscene_seek :: (id: s32, cell: s32) -> bool, u64 {
     close_scene();
     stop_sounds(keep_marked = false);
     cut.seeking = true;
     start_cutscene(id, 0);
+    cell = min(cell, cut.film.cell_count);
     while cut.scene && cut.scene.id == id && cut.film.cell < cell  run_event();
     cut.seeking = false;
     if !cut.scene return false, 0;
     film_send_cues(*cut.film);
     return true, cast(u64) (cut.clock.event * 1_000_000_000.0);
+}
+
+// After a seek, the music as playing the cinematic to here would have left it, in the loop it
+// had settled into (music.jai): the original's cues only move it forward. The cues are those
+// the films send from the scene back along the chain that started the music sequence.
+cutscene_sync_music :: () {
+    if !cut.scene return;
+    chain: [..] *Cutscene_Entry;
+    chain.allocator = temp;
+    entry := cut.scene;
+    while entry && chain.count < cut.list.count {
+        array_insert_at(*chain, entry, 0);
+        if entry.music > 0 break;
+        previous: *Cutscene_Entry;
+        for * cut.list  if it.next == entry.id && it.id != entry.id { previous = it; break; }
+        entry = previous;
+    }
+    if !entry || entry.music <= 0 return;
+    cues: [..] s32;
+    cues.allocator = temp;
+    for chain {
+        if it == cut.scene {
+            film_list_cues(*cut.film, cut.film.cell, *cues);
+            continue;
+        }
+        archive, ok := archive_open(get_scene_archive_path(it));
+        if !ok continue;
+        film: Film;
+        if film_load(*film, archive, it.film, load_sounds = false)  film_list_cues(*film, film.cell_count, *cues);
+        film_free(*film);
+        archive_close(archive);
+    }
+    sync_music_to_cues(entry.music, cues);
 }
 
 cutscene_is_playing :: () -> bool {

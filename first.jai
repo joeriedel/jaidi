@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (c) 2026 Joseph Riedel
 
-// Build: jai first.jai            -> bin/jaidi
+// Build: jai first.jai            -> bin/jaidi, optimized by LLVM, with debug info
 //        jai first.jai - check    -> typecheck only, no output
 //        jai first.jai - release  -> bin/jaidi, optimized by LLVM, no debug info
 //        jai first.jai - ship     -> bin/jaidi without the tools and dev options (SHIP);
@@ -36,7 +36,10 @@
         options.backend = .LLVM;
         options.intermediate_path = ".build/release";
     } else {
-        options.backend = .X64;
+        // Optimized all the same: the in-between fitting and the cutscenes' decoding are far
+        // too slow unoptimized to work with.
+        set_optimization(*options, .OPTIMIZED);
+        options.backend = .LLVM;
         options.intermediate_path = ".build";
     }
     if cross {

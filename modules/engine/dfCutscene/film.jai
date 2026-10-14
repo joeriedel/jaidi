@@ -32,6 +32,7 @@ Actor :: struct {
     cut_at_edge:  bool;         // Some frame of its, shown, has its art cut off at or just past
                                 // the screen's left or right edge.
     grown:        bool;         // Drawn larger in a wide view, with what it's shown with (see film_load).
+    pillarboxed:  bool;         // Kept to the 4:3 area in a wide view instead (PILLARBOXED_SHOTS).
 }
 
 Film_Object :: struct {
@@ -122,7 +123,8 @@ film_load :: (film: *Film, archive: *Archive, name: string, load_sounds := true)
     // turning to bow, a frame of its own), unless it covers the screen's width: the background
     // of a new shot. Growing actors one by one parted a talking head from its body; growing whole films
     // grew shots that needed none. Star fields (which wrap instead), told by the palette set
-    // when they first span the screen, and background tiles neither grow nor join others.
+    // when they first span the screen, and background tiles don't join others; tiles that
+    // aren't star fields grow with the shot they're in (below).
     star := NewArray(film.actors.count, bool,, temp);
     for film.actors  if it.spans_screen && it.frames.count {
         palette := get_film_palette_at(film, spans_cell[it_index]);
@@ -152,6 +154,29 @@ film_load :: (film: *Film, archive: *Archive, name: string, load_sounds := true)
     grows := NewArray(film.actors.count, bool,, temp);
     for film.actors  if !is_apart(it_index) && (it.spans_screen || it.cut_at_edge)  grows[find_group(group, it_index)] = true;
     for film.actors  it.grown = !is_apart(it_index) && grows[find_group(group, it_index)];
+    // A background the film pans by tiles (madine1's hall behind Kyle) grows with the actors
+    // shown on it, or they'd be larger than the room around them. Star fields wrap instead,
+    // told apart as they're drawn.
+    for tile, i: film.actors {
+        if !is_background_tile(tile) || star[i] || !shown[i].count continue;
+        for cell: 0..film.cell_count-1 {
+            if !shown[i][cell] continue;
+            for film.actors  if it.grown && shown[it_index].count && shown[it_index][cell]  tile.grown = true;
+            if tile.grown break;
+        }
+    }
+    for shot: PILLARBOXED_SHOTS  if equal_nocase(shot.film, name) {
+        root := -1;
+        if shot.actor {
+            for film.actors  if equal_nocase(it.name, shot.actor) { root = find_group(group, it_index); break; }
+            if root < 0 continue;
+        }
+        for film.actors {
+            if root >= 0 && (is_apart(it_index) || find_group(group, it_index) != root) continue;
+            it.pillarboxed = true;
+            it.grown = false;
+        }
+    }
     quick_sort(film.frame_pairs, (a: Frame_Pair, b: Frame_Pair) -> s32 { return a.cell - b.cell; });
     return true;
 }
@@ -219,6 +244,33 @@ film_step :: (film: *Film) {
 // A custom actor's VAR1 is the music cue, sent every frame; the music ignores repeats.
 film_send_cues :: (film: *Film) {
     for film.actors  if it.kind == .CUSTOM && it.var1  set_music_cue(max(it.var1, 0));
+}
+
+// The music cues the film sends in its cells before 'cells', as film_send_cues sends them
+// after each, read from its custom actors' records; added to 'cues' unless repeats.
+film_list_cues :: (film: *Film, cells: s32, cues: *[..] s32) {
+    Custom :: struct { object: *Film_Object; at: s64; var1: s32; }
+    customs: [..] Custom;
+    customs.allocator = temp;
+    for * film.objects  if it.actor && it.actor.kind == .CUSTOM  array_add(*customs, .{object = it});
+    for cell: 0..min(cells, film.cell_count)-1 {
+        for * c: customs {
+            length, op, args := film_read_command(c.object.commands, c.at);
+            if op != .TIMESTAMP || film_get_arg(args, 0) != cell continue;
+            c.at += length;
+            while true {
+                length=, op=, args= = film_read_command(c.object.commands, c.at);
+                if op == .TIMESTAMP || op == .END break;
+                if op == .VAR1  c.var1 = film_get_arg(args, 0);
+                c.at += length;
+            }
+        }
+        for customs {
+            if !it.var1 continue;
+            cue := max(it.var1, 0);
+            if !cues.count || cues.*[cues.count - 1] != cue  array_add(cues, cue);
+        }
+    }
 }
 
 // Larger z first, so smaller z draws on top; equal z keeps its order.
@@ -330,6 +382,17 @@ run_cell :: (film: *Film, object: *Film_Object) {
         object.offset += length;
     }
 }
+
+// Shots of people in a room, where growing to a wide view's edges would cut off their heads
+// (madine1's Mohc and Vader): kept to the 4:3 area instead, between bars. A shot is the actors
+// shown together with the one named, usually its background; none named, the whole film. Told
+// by eye: the art can't tell a head near the top from a ship's hull, which grows well.
+Pillarboxed_Shot :: struct { film: string; actor: string; }
+PILLARBOXED_SHOTS :: Pillarboxed_Shot.[
+    .{"madine1", "hall2x"},         // Mohc, Vader and Kyle; not the hall before.
+    .{"award2", ""},
+    .{"pit", ""},                   // Its subtitles, at the bottom, would be cut off.
+];
 
 // A tile of a background the film scrolls itself (kflyby's star fields): its picture shown by
 // other actors shown with it, and covering the screen or cut by its edge. Patches can share a picture too
@@ -550,4 +613,5 @@ update_actor :: (a: *Actor) {
 
 #import "Basic";
 #import "Sort";
+#import "String";
 #import "engine/dfArchive";

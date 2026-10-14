@@ -437,7 +437,8 @@ draw_cutscene_controls :: (c: Cutscene_Debug) {
     ImGui.SameLine();
     cell := c.cell;
     ImGui.SetNextItemWidth(-1);
-    if ImGui.SliderInt("##cell", *cell, 1, max(c.cell_count, 1), "cell %d")  seek_cutscene(c.scene.id, cell);
+    if ImGui.SliderInt("##cell", *cell, 1, max(c.cell_count, 1), "cell %d")  seek_cutscene(c.scene.id, cell, sync_music = false);
+    if ImGui.IsItemDeactivatedAfterEdit()  cutscene_sync_music();
 
     // The cinematic's scenes: back to the one no other leads to, then on by each next.
     list := cutscene_get_list();
@@ -469,9 +470,12 @@ draw_cutscene_controls :: (c: Cutscene_Debug) {
     }
 }
 
-seek_cutscene :: (scene: s32, cell: s32) {
+// The music put back where the cues have it, unless while dragging.
+seek_cutscene :: (scene: s32, cell: s32, sync_music := true) {
     ok, time := cutscene_seek(scene, max(cell, 1));
-    if ok  set_cutscene_time(time);
+    if !ok return;
+    set_cutscene_time(time);
+    if sync_music  cutscene_sync_music();
 }
 
 // The clock cutscene_update gets, set to a time.

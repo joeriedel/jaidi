@@ -2105,6 +2105,42 @@ sewers_ship_in_the_way :: () {
     check(p.position.x > 174 * FIXED_ONE, "walked into the hull to %", at(p));
 } @test
 
+// Dead, the fire key does nothing (the controls aren't read, 0x2ad50); after the delay the
+// revive key brings the player back with a life less, and the pistol fires again.
+secbase_dead_cant_fire :: () {
+    skip_without_dark();
+    if !start_level("SECBASE") return;
+    defer world_unload();
+    if !run(60, .{}) return;
+    a := world_get_agent();
+    s := world_get_player_state();
+    a.shields = 0;
+    a.health = 1;
+    lives := a.lives;
+    launch(.THERMAL_DETONATOR, world_get_player().position, -90, 0);
+    for 1..400 {
+        if !run(1, .{}) return;
+        if s.dying break;
+    }
+    if !check(s.dying, "never died: health %", a.health) return;
+    if !run(20, .{}) return;
+    fired := false;
+    for 1..60 {
+        if !run(1, .{fire = true}) return;
+        if world_get_projectile_count()  fired = true;
+    }
+    if !check(!fired, "fired while dead") return;
+    if !run(300, .{}) return;
+    if !run(1, .{revive = true}) return;
+    if !check(!s.dying && a.health == 100 && a.lives == lives - 1, "not back: dying %, health %, lives % of %", s.dying, a.health, a.lives, lives) return;
+    if !run(20, .{}) return;
+    for 1..60 {
+        if !run(1, .{fire = true}) return;
+        if world_get_projectile_count()  fired = true;
+    }
+    check(fired, "didn't fire once back");
+} @test
+
 #scope_file
 
 // Puts the player a distance in front of an object, facing it, a unit above its feet.

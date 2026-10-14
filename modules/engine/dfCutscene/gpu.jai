@@ -55,7 +55,8 @@ cutscene_present_gpu :: (now: u64, smooth: bool, width: s32, height: s32, aspect
 
     seconds := cast(float64) (now - cut.start_ns) / 1_000_000_000.0;
     fade := get_fade_state(seconds);
-    if is_wiping() {
+    // A wipe that fades one palette into another (none does) shows the exact image.
+    if is_wiping() && fade.mode == .PALETTE {
         source, destination := widen_palette(fade.first), widen_palette(fade.second);
         render_film_resolve_fade(*g.video, *g.output, *source, *destination, fade.mode, fade.fraction, fade.dither);
         return g.output.color, 4.0 / 3.0;
@@ -64,6 +65,16 @@ cutscene_present_gpu :: (now: u64, smooth: bool, width: s32, height: s32, aspect
     collect_motions();
     // In the screen's pixels: 200 down, and 320 across at 4:3, so 240 x aspect across.
     view_width := 240 * clamp(aspect, 4.0 / 3.0, 16.0 / 9.0);
+    if is_wiping() {
+        // The old picture, and the new one inside the wipe's rectangle over it, both through
+        // the palette a fade to or from black goes through.
+        palette := find_palette(ifx fade.mode == .FROM_MONO then fade.second else fade.first);
+        draw_in_between(*g.smooth_second, g.previous, false, palette, seconds, view_width);
+        draw_in_between(*g.smooth, g.shown, false, palette, seconds, view_width);
+        wipe, shift := get_wipe_rect(seconds, view_width, g.smooth.width, g.smooth.height);
+        render_film_output(*g.smooth_second, *g.smooth, *g.smooth_output, fade.mode, fade.fraction, fade.dither, sharpen = true, wiping = true, wipe = wipe, shift = shift);
+        return g.smooth_output.color, view_width / 240;
+    }
     // A held snap shows the old picture until its midpoint.
     old := is_holding_old_picture();
     drawings := ifx old then g.previous else g.shown;
@@ -314,6 +325,69 @@ is_wiping :: () -> bool {
     return f.type > .LONG_SNAP && f.type <= .THICK_SLICE;
 }
 
+// Where a wipe shows the new picture, in output pixels, and how far it's moved there (slides):
+// the original's rectangle (copy_fade) taken over the whole wide view, its edges at the
+// screen's edges at the view's, and moved on smoothly between its steps, one a retrace.
+get_wipe_rect :: (seconds: float64, view_width: float, width: s32, height: s32) -> [4] float, [2] float {
+    f := *cut.fade;
+    // The pass at f.step comes at the next event; the one before is on screen.
+    ahead := clamp((cut.clock.event - seconds) * RETRACES_PER_SECOND, 0, 1);
+    p := cast(float) clamp((f.step - ahead) / f.length, 0, 1);
+    margin := (view_width - CANVAS_WIDTH) / 2;
+    left, top, right, bottom := -margin, 0.0, CANVAS_WIDTH + margin, cast(float) CANVAS_HEIGHT;
+    w, h := right - left, bottom - top;
+    grow_w, grow_h := w * p, h * p;
+    back := 1 - p;
+    r := float.[left, top, right, bottom];
+    x, y := left, top;
+    if f.type == {
+      case .SLIDE_LEFT;   r[0] = right - grow_w;
+      case .SLIDE_RIGHT;  r[2] = left + grow_w;  x = right - (r[2] - r[0]);
+      case .SLIDE_UP;     r[3] = top + grow_h;   y = bottom - (r[3] - r[1]);
+      case .SLIDE_DOWN;   r[1] = bottom - grow_h;
+      case .SLIDE_TOP_LEFT;
+        r[1] = bottom - grow_h;  r[2] = left + grow_w;  x = right - (r[2] - r[0]);
+      case .SLIDE_TOP_RIGHT;
+        r[1] = bottom - grow_h;  r[0] = right - grow_w;
+      case .SLIDE_BOTTOM_LEFT;
+        r[3] = top + grow_h;  r[2] = left + grow_w;  x = right - (r[2] - r[0]);  y = bottom - (r[3] - r[1]);
+      case .SLIDE_BOTTOM_RIGHT;
+        r[3] = top + grow_h;  r[0] = right - grow_w;  y = bottom - (r[3] - r[1]);
+      case .WIPE_LEFT;    r[2] = left + grow_w;
+      case .WIPE_RIGHT;   r[0] = right - grow_w;  x = r[0];
+      case .WIPE_UP;      r[1] = bottom - grow_h;  y = r[1];
+      case .WIPE_DOWN;    r[3] = top + grow_h;
+      case .WIPE_TOP_LEFT;
+        r[1] = bottom - grow_h;  r[2] = left + grow_w;  y = r[1];
+      case .WIPE_TOP_RIGHT;
+        r[1] = bottom - grow_h;  r[0] = right - grow_w;  x = r[0];  y = r[1];
+      case .WIPE_BOTTOM_LEFT;
+        r[3] = top + grow_h;  r[2] = left + grow_w;
+      case .WIPE_BOTTOM_RIGHT;
+        r[3] = top + grow_h;  r[0] = right - grow_w;  x = r[0];
+      case .VERTICAL_CENTER;
+        v := h / 2 * back;
+        r[1] = top + v;  r[3] = bottom - v;  y = r[1];
+      case .HORIZONTAL_CENTER;
+        v := w / 2 * back;
+        r[0] = left + v;  r[2] = right - v;  x = r[0];
+      case .CENTER;
+        v := h / 2 * back;
+        r[1] = top + v;  r[3] = bottom - v;  y = r[1];
+        v = w / 2 * back;
+        r[0] = left + v;  r[2] = right - v;  x = r[0];
+      case;
+        // The slices copy nothing: the old picture stays.
+        return .[0, 0, 0, 0], .[0, 0];
+    }
+    // Shown at (x, y), the rectangle's picture moves by (x, y) less its corner.
+    sx, sy := width / view_width, height / cast(float) CANVAS_HEIGHT;
+    to_output :: (px: float, py: float) -> float, float #expand { return (px + margin) * sx, py * sy; }
+    l, t := to_output(x, y);
+    rr, b := to_output(x + r[2] - r[0], y + r[3] - r[1]);
+    return .[l, t, rr, b], .[(x - r[0]) * sx, (y - r[1]) * sy];
+}
+
 // A held snap fade before its midpoint step, where the original copies the new picture over.
 is_holding_old_picture :: () -> bool {
     f := *cut.fade;
@@ -431,14 +505,15 @@ draw_in_between :: (target: *Film_Image, drawings: [] Drawing, interpolate: bool
         // fields, which wrap (told again here by the palette they're shown in). Otherwise,
         // where it's clipped only by the screen's edge, it's drawn on into the margin: its art
         // goes on past the screen's edge there (a ship crossing it, a field's next tile), and
-        // the original's screen hid it.
+        // the original's screen hid it. A pillarboxed film's actors keep to the screen, between
+        // bars, while its star fields still wrap.
         offset := Vector2.{margin, 0};
         size := scale;
         if margin > 0 && !bake.stars && c.actor.grown {
             grow := view_width / CANVAS_WIDTH;
             offset = .{(margin + CANVAS_WIDTH / 2) / grow - CANVAS_WIDTH / 2, (CANVAS_HEIGHT / 2) / grow - CANVAS_HEIGHT / 2};
             size = .{scale.x * grow, scale.y * grow};
-        } else if margin > 0 {
+        } else if margin > 0 && (bake.stars || !c.actor.pillarboxed) {
             // Each side on its own: a film may wipe by moving one edge of a clip in from the
             // other (kflyby's Executor shot).
             if c.clip.left <= 0             clip[0] = -margin;

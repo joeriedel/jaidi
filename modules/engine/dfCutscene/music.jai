@@ -92,6 +92,32 @@ set_music_cue :: (cue: s32) {
     }
 }
 
+// The music put where the cues sent so far would have it, near enough for a seek: from the
+// sequence's start, each cue sent and the song then run on, silently, until it settles into a
+// loop, its next jump taken with no hook set (a jump on a hook leads out of a loop, so the run
+// goes on to the one after). Positional cues are judged against where the song has settled,
+// rather than where the timing of play would have it. The last cue leaves the song where it
+// lands: a song's start, a jump's target, or just past the jump a released hook lets it take.
+// Then the notes the run left sounding are cut.
+sync_music_to_cues :: (sequence_id: s32, cues: [] s32) {
+    if sequence_id != cut_music.sequence_id  set_music_sequence(sequence_id);
+    audio_lock();
+    defer audio_unlock();
+    imuse_stop_all();
+    cut_music.cue, cut_music.saved_song = 0, 0;
+    for cues {
+        set_music_cue(it);
+        if it_index < cues.count - 1 {
+            settle_in_loop();
+            continue;
+        }
+        song := run_through_hook();
+        if !song continue;
+        chunk, measure, beat, tick := imuse_get_position(song);
+        imuse_jump(song, chunk, measure, beat, tick);
+    }
+}
+
 cut_music: struct {
     sequence_id: s32;
     cue:         s32;
@@ -100,7 +126,41 @@ cut_music: struct {
 
 #scope_file
 
-switch_songs :: (old_song: Imuse_Song, new_song: Imuse_Song) {
+// Runs the newest song on until it takes a jump with no hook set; that song, there at the
+// loop's start, or 0 if it stops first or none comes in three minutes.
+settle_in_loop :: () -> Imuse_Song {
+    return run_newest_song(to_loop = true);
+}
+
+// The newest song, run on only while a hook is set, until the jump it lets the song take; 0
+// if it stops first.
+run_through_hook :: () -> Imuse_Song {
+    return run_newest_song(to_loop = false);
+}
+
+run_newest_song :: (to_loop: bool) -> Imuse_Song {
+    LIMIT :: 3 * 60 * 1_000_000 / IMUSE_TICK_US;
+    status := imuse_get_status();
+    if !status.player_count return 0;
+    song := status.players[0].song;
+    jumps, hook := status.players[0].jumps, status.players[0].hook;
+    if !to_loop && !hook  return song;
+    for 1..LIMIT {
+        imuse_tick();
+        status = imuse_get_status();
+        p: *Imuse_Player_State;
+        for * status.players  if it_index < status.player_count && it.song == song  p = it;
+        if !p return 0;
+        if p.jumps != jumps {
+            if !to_loop || (!hook && !p.hook)  return song;
+            jumps = p.jumps;
+        }
+        hook = p.hook;
+    }
+    return 0;
+}
+
+switch_songs ::(old_song: Imuse_Song, new_song: Imuse_Song) {
     imuse_stop(old_song);
     imuse_play(new_song);
     imuse_set_hook(old_song, 0);

@@ -225,9 +225,86 @@ retail_seek_matches_playing :: () {
     }
 } @test
 
+// Seeking past a scene's last cell stops at it, in the scene, as playing showed it last: the
+// Cutscenes tool rewinds into the previous scene that way.
+retail_seek_past_the_end :: () {
+    skip_without_dark();
+    dark_dir := find_dark_data_dir();
+    if !check(gob_mount_retail(dark_dir), "can't mount the GOBs")  return;
+    defer gob_unmount_all();
+    if !check(cutscene_init(), "CUTSCENE.LST didn't load")  return;
+    defer cutscene_shutdown();
+    imuse_init();
+    if !check(imuse_load_digital_tables(dark_dir), "iMUSE's tables didn't load")  return;
+
+    scene: s32 = 40;    // 1E, which goes on to 41.
+    if !check(cutscene_start(scene, 0), "scene % didn't start", scene)  return;
+    defer cutscene_stop();
+    now: u64;
+    last: s32;
+    video: [] u8;
+    while cutscene_get_scene() == scene {
+        if cutscene_get_cell() != last {
+            last = cutscene_get_cell();
+            video = array_copy(cutscene_get_video(),, temp);
+        }
+        now += 1_000_000;
+        cutscene_update(now);
+    }
+    ok := cutscene_seek(scene, S32_MAX);
+    if !check(ok && cutscene_get_scene() == scene && cutscene_get_cell() == last, "went to scene % cell %, not % cell %", cutscene_get_scene(), cutscene_get_cell(), scene, last) return;
+    seeked := cutscene_get_video();
+    check(seeked.count == video.count && memcmp(seeked.data, video.data, video.count) == 0, "the screen differs");
+} @test
+
+// After a seek back, the music is put where the scene's cues have it: the cinematic played on
+// past the scene with iMUSE ticked alongside, then the scene's start seeked to and the music
+// synced, it plays the song at the place its cue in CUTMUSE.TXT names.
+retail_music_sync_restarts_the_cue :: () {
+    skip_without_dark();
+    dark_dir := find_dark_data_dir();
+    if !check(gob_mount_retail(dark_dir), "can't mount the GOBs")  return;
+    defer gob_unmount_all();
+    if !check(cutscene_init(), "CUTSCENE.LST didn't load")  return;
+    defer cutscene_shutdown();
+    imuse_init();
+    if !check(imuse_load_digital_tables(dark_dir), "iMUSE's tables didn't load")  return;
+
+    // The Star Wars logo starts the theme at its chunk B, measure 2 ("B 2 B 2"); Jabba's
+    // third and fourth scenes jump to measures 18 and 40 ("A 18 A 18", "A 40 A 40").
+    Target :: struct { first: s32; later: s32; scene: s32; song: string; chunk: int; measure: int; }
+    targets :: Target.[
+        .{CUTSCENE_OPENING, 40, 20, "star-thm", 2, 2},
+        .{1000, 1030, 1020, "jabbamus", 1, 18},
+        .{1000, 1030, 1030, "jabbamus", 1, 40},
+    ];
+    for target: targets {
+        if !check(cutscene_start(target.first, 0), "scene % didn't start", target.first)  return;
+        now, tick_at: u64;
+        while cutscene_is_playing() && !(cutscene_get_scene() == target.later && cutscene_get_cell() >= 20) {
+            now += 1_000_000;
+            cutscene_update(now);
+            while tick_at <= now {
+                imuse_tick();
+                tick_at += IMUSE_TICK_US * 1000;
+            }
+        }
+        if !check(cutscene_get_scene() == target.later, "didn't reach scene %", target.later) return;
+        ok := cutscene_seek(target.scene, 1);
+        if !check(ok, "the seek to scene % failed", target.scene) return;
+        cutscene_sync_music();
+        status := imuse_get_status();
+        if !check(status.player_count > 0, "scene %: no music", target.scene) continue;
+        p := *status.players[0];
+        check(p.name == target.song && p.chunk == target.chunk && p.measure == target.measure, "scene %: % chunk % measure %, not % chunk % measure %",
+              target.scene, p.name, p.chunk, p.measure, target.song, target.chunk, target.measure);
+        cutscene_stop();
+    }
+} @test
+
 #scope_file
 
-append_u16 :: (bytes: *[..] u8, v: s64) {
+append_u16 ::(bytes: *[..] u8, v: s64) {
     array_add(bytes, cast,trunc(u8) v, cast,trunc(u8) (v >> 8));
 }
 
@@ -243,6 +320,7 @@ append_object :: (bytes: *[..] u8, type: string, name: string, block: s32, comma
 }
 
 #import "Basic";
+#import "Math";
 #import "engine/dfArchive";
 #import "engine/dfCutscene";
 #import "engine/dfIMuse";

@@ -146,13 +146,17 @@ update_player :: (input: World_Input) {
         safe := find_safe(p.sector);
         if safe { s.safe = safe.*; s.has_safe = true; }
     }
+    // Dying, the controls aren't read, use and fire included, so a held trigger lets go.
+    // That's decided before this frame's damage: the frame the player dies on still fires.
+    controls := !s.dying;
     read_controls(p, input);
     update_physics(p);
     update_battery();
     // The use key acts once a press (0x2e418).
-    if input.use && !p.use_held  use_key(p);
-    p.use_held = input.use;
-    pass_fire_keys(input.fire, input.fire_secondary);
+    use := controls && input.use;
+    if use && !p.use_held  use_key(p);
+    p.use_held = use;
+    pass_fire_keys(controls && input.fire, controls && input.fire_secondary);
     if !s.dying  pass_weapon_keys(input.weapon_keys);
     update_screen_effects();
     if s.dying  update_dying(p, input);
