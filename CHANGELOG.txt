@@ -1,6 +1,18 @@
 jaidi changelog
 ===============
 
+0.2.5 (2026-10-14)
+------------------
+
+A fix on Imperial City, and better aim assist.
+
+- Fixed: on Imperial City, shooting the switch in the slot behind the high ledge did
+  nothing.
+- Fixed: the aim assist could bend your shots toward enemies you couldn't see, such as
+  ones behind walls or pillars. Now it only aims at enemies in view.
+
+Still missing: settings and configuration screens.
+
 0.2.4 (2026-10-14)
 ------------------
 

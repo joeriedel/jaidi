@@ -79,7 +79,7 @@ world_draw :: (width: s32, height: s32, options: World_Draw_Options) -> *SDL_GPU
     // rather than in their sector's window: they fly over the level, out past any one
     // sector's opening.
     render_set_world_draw(.GEOMETRY, 0);
-    for c.on_paths  draw_object(*c, it.object, it.sector);
+    for c.on_paths  draw_object(*c, it.object, it.sector, window);
 
     // The HUD over it, in the original's 320x200, or in the 4:3 part of a wider view; the
     // panels and the message at the view's edges either way.
@@ -473,7 +473,7 @@ draw_sector :: (c: *Camera, sector_index: s32, level: s32, window: Window, min_z
     // Before the openings: their marks are depth tested, so what stands in front of one keeps
     // it covered.
     render_set_clip_plane(NO_CLIP);
-    draw_objects(c, sector_index, level);
+    draw_objects(c, sector_index, level, window);
     render_set_world_draw(.GEOMETRY, xx level);
     render_set_clip_plane(clip);
 
@@ -719,7 +719,7 @@ clip_window :: (poly: Window, p: Vector2, q: Vector2, window: Window) -> Window 
 // are discarded rather than blended. They mark the stencil where they show, so the sector's
 // floor and ceiling, drawn later, don't cut what reaches into them (a body or a mine lying on
 // the floor): the original clips objects to their sector's window alone (0x506a0).
-draw_objects :: (c: *Camera, sector_index: s32, level: s32) {
+draw_objects :: (c: *Camera, sector_index: s32, level: s32, window: Window) {
     render_set_world_draw(.OBJECT, xx (level | STENCIL_DRAWN));
     for object: walk_sector(sector_index) {
         if is_on_vue_path(object) {
@@ -729,7 +729,7 @@ draw_objects :: (c: *Camera, sector_index: s32, level: s32) {
             if !listed  array_add(*c.on_paths, .{object, sector_index});
             continue;
         }
-        draw_object(c, object, sector_index);
+        draw_object(c, object, sector_index, window);
     }
 }
 
@@ -738,8 +738,11 @@ is_on_vue_path :: (object: s32) -> bool {
     return false;
 }
 
-// Lit by the sector it's drawn in.
-draw_object :: (c: *Camera, index: s32, sector: s32) {
+// Lit by the sector it's drawn in. The aiming help takes it only where it shows in the
+// window it's drawn through, as the original lists an object only when one of its columns
+// is drawn (0x4c320); the original's test against the walls drawn in those columns isn't
+// made here.
+draw_object :: (c: *Camera, index: s32, sector: s32, window: Window) {
     object := world.objects[index];
     if object.flags & OBJECT_HIDDEN return;
     lighting := get_lighting(c, *world.level.sectors[sector]);
@@ -755,30 +758,54 @@ draw_object :: (c: *Camera, index: s32, sector: s32) {
             object = *between;
         }
     }
-    if to_view(c, to_vector(world.objects[index].position)).z >= 1  note_drawn_object(index);
+    shown := false;
     if object.class == {
         case .SPRITE;
-            if object.data >= 0 && object.data < world.sprites.count  draw_sprite(c, object, *world.sprites[object.data], lighting, true);
+            if object.data >= 0 && object.data < world.sprites.count  shown = draw_sprite(c, object, *world.sprites[object.data], lighting, true, window);
         case .FRAME;
-            if object.data >= 0 && object.data < world.frames.count   draw_sprite(c, object, *world.frames[object.data], lighting, false);
+            if object.data >= 0 && object.data < world.frames.count   shown = draw_sprite(c, object, *world.frames[object.data], lighting, false, window);
         case .MODEL;
-            if object.data >= 0 && object.data < world.models.count   draw_model(c, object, *world.models[object.data], lighting);
+            if object.data >= 0 && object.data < world.models.count   shown = draw_model(c, object, *world.models[object.data], lighting, window);
     }
+    if shown  note_drawn_object(index);
+}
+
+// Whether a rectangle facing the camera at view depth z shows in the window.
+is_in_window :: (c: *Camera, left: float, top: float, right: float, bottom: float, z: float, window: Window) -> bool {
+    a := project(c, .{left, top, z});
+    b := project(c, .{right, bottom, z});
+    return is_in_window(.{min(a.x, b.x), min(a.y, b.y)}, .{max(a.x, b.x), max(a.y, b.y)}, window);
+}
+
+// Whether a rectangle on the screen, in pixels, overlaps the window.
+is_in_window :: (low: Vector2, high: Vector2, window: Window) -> bool {
+    poly: Window;
+    poly.count = 4;
+    poly.points[0] = low;
+    poly.points[1] = .{high.x, low.y};
+    poly.points[2] = high;
+    poly.points[3] = .{low.x, high.y};
+    for 0..window.count-1 {
+        poly = clip_window(poly, window.points[it], window.points[(it + 1) % window.count], window);
+        if !poly.count return false;
+    }
+    return true;
 }
 
 // A sprite stands at its position, facing the camera, at the one depth of its position. It
 // shows the object's action and frame, a WAX in the view for the camera's direction from it
 // against its yaw, in 32 steps. Its size is scaled by its first action's world width and
-// height, whichever action shows. A lit one is at full light.
-draw_sprite :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting, wax: bool) {
+// height, whichever action shows. A lit one is at full light. Shown: its frame reaches into
+// the window.
+draw_sprite :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting, wax: bool, window: Window) -> shown: bool {
     sprite := *art.sprite;
-    if !sprite.actions return;
+    if !sprite.actions return false;
     position := to_vector(object.position);
     v := to_view(c, position);
-    if v.z < 1 return;
+    if v.z < 1 return false;
 
     action := *sprite.actions[ifx wax && object.anim < sprite.actions.count then object.anim else 0];
-    if !action.views return;
+    if !action.views return false;
     view_index := 0;
     if wax {
         // The original's 14-bit angles.
@@ -788,10 +815,10 @@ draw_sprite :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting
         view_index = (31 - d) % action.views.count;
     }
     view := *action.views[view_index];
-    if !view.frames return;
+    if !view.frames return false;
     frame_index: int = ifx object.frame < view.frames.count then object.frame else 0;
     frame := *view.frames[frame_index];
-    if frame.cell < 0 || frame.cell >= art.images.count return;
+    if frame.cell < 0 || frame.cell >= art.images.count return false;
     image := *art.images[frame.cell];
 
     sx := sprite.actions[0].world_width  / (65536.0 * 10);
@@ -812,16 +839,18 @@ draw_sprite :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting
     render_set_image(image);
     render_add_quad(.{left, top, v.z}, .{right, bottom, v.z}, .{u0, 0}, .{u1, xx image.height}, light, v.z,
                     render_pack_color(.TEXTURE_FLAT, transparent = true));
+    return is_in_window(c, left, top, right, bottom, v.z, window);
 }
 
 // A 3D object turned by its yaw, pitch and roll, or by the matrix its path gives it, and lit
-// the original's way: the camera's three lights turn with its yaw only.
-draw_model :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting) {
+// the original's way: the camera's three lights turn with its yaw only. Shown: the screen
+// box of its corners in front of the camera reaches into the window.
+draw_model :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting, window: Window) -> shown: bool {
     model := *art.model;
-    if !model.vertices return;
+    if !model.vertices return false;
     position := to_vector(object.position);
     center := to_view(c, position);
-    if center.z + model.radius < MODEL_NEAR return;
+    if center.z + model.radius < MODEL_NEAR return false;
 
     // The object's matrix: from its angles, or as a path set it (vue.jai).
     m: Matrix3;
@@ -855,6 +884,14 @@ draw_model :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting)
 
     transformed := NewArray(model.vertices.count, Vector3,, temp);
     for model.vertices  transformed[it_index] = to_view(c, position + turn(it, m));
+    low, high := Vector2.{FLOAT32_MAX, FLOAT32_MAX}, Vector2.{-FLOAT32_MAX, -FLOAT32_MAX};
+    for transformed {
+        if it.z < MODEL_NEAR continue;
+        p := project(c, it);
+        low = .{min(low.x, p.x), min(low.y, p.y)};
+        high = .{max(high.x, p.x), max(high.y, p.y)};
+    }
+    shown := low.x <= high.x && is_in_window(low, high, window);
 
     ramp := world.colormap.light_ramp;
     // The lights in view space: the world's directions turned by the camera's yaw.
@@ -866,7 +903,7 @@ draw_model :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting)
         for transformed  points[it_index] = .{it, .{}, 0, it.z, render_pack_color(.COLOR_RAW, color)};
         render_set_image(null);
         render_add_points(points);
-        return;
+        return shown;
     }
 
     intensities: [] float;
@@ -940,6 +977,7 @@ draw_model :: (c: *Camera, object: *Object, art: *World_Art, lighting: Lighting)
         render_set_image(image);
         for 1..count-2  render_add_triangles(.[corners[0], corners[it], corners[it + 1]]);
     }
+    return shown;
 }
 
 // 3D objects have their own near plane, a unit out (0x5f934, 0x6052c, 0x62488): an edge

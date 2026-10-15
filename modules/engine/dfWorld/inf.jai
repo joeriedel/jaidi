@@ -1678,19 +1678,23 @@ parse_double :: (s: string) -> float64 {
     return ifx ok then f else 0;
 }
 
+// As the original's atoi (0x8eae0): a sign, then digits. Masks take it too, so Imperial
+// City's "entity_mask: -1" is every entity.
 parse_uint :: (s: string) -> u32 {
-    value: u64;
-    for 0..s.count-1 {
-        c := s[it];
+    t := s;
+    negative := t && t[0] == #char "-";
+    if t && (t[0] == #char "-" || t[0] == #char "+")  t = advance(t, 1);
+    value: u32;
+    for 0..t.count-1 {
+        c := t[it];
         if c < #char "0" || c > #char "9" break;
         value = value * 10 + c - #char "0";
     }
-    return cast,trunc(u32) value;
+    return ifx negative then 0 - value else value;
 }
 
 parse_int :: (s: string) -> s32 {
-    if s && s[0] == #char "-" return -cast(s32) parse_uint(advance(s, 1));
-    return cast(s32) parse_uint(s);
+    return cast,no_check(s32) parse_uint(s);
 }
 
 is_number :: (s: string, dot_too: bool) -> bool {

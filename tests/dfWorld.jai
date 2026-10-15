@@ -122,6 +122,27 @@ secbase_switch_opens_front_door :: () {
     check(s.floor.altitude - s.ceiling.altitude == 0xC8000, "the front door is % units open", (s.floor.altitude - s.ceiling.altitude) / 65536.0);
 } @test
 
+// Imperial City's shoot_it, a switch in a slot behind the vantage ledge, lowers the ledge
+// from 115.5 to 100.5 when shot. Its "entity_mask: -1" has to read as every entity, as the
+// original's atoi has it.
+impcity_shot_switch_lowers_vantage :: () {
+    skip_without_dark();
+    if !start_level("IMPCITY") return;
+    defer world_unload();
+    level := world_get_level();
+    vantage := find_sector_named(level, "vantage");
+    if !check(vantage >= 0, "no vantage sector") return;
+    s := *level.sectors[vantage];
+    if !check(s.floor.altitude == -115 * FIXED_ONE - FIXED_HALF, "the vantage starts at %", s.floor.altitude / 65536.0) return;
+    // From the ledge at the sign's height, straight at the middle of the sign.
+    from := Fixed3.{458 * FIXED_ONE, -121 * FIXED_ONE - FIXED_HALF, 61 * FIXED_ONE};
+    sign_x, sign_z := 465.37, 65.17;
+    yaw := cast(s32) (atan2(sign_x - 458, sign_z - 61) / TAU * 16384);
+    if !check(world_launch_projectile(.RIFLE_BOLT, from, 0, yaw) >= 0, "no bolt") return;
+    if !run(300, .{}) return;
+    check(s.floor.altitude == -100 * FIXED_ONE - FIXED_HALF, "the vantage is at %", s.floor.altitude / 65536.0);
+} @test
+
 // A door closing over a thrown mine clears it away and shuts, rather than turning back:
 // corpses, pickups that can go and these mines don't hold an elevator up (0x5cf44). The
 // front door starts closing about 820 frames after its switch; the mine is thrown into it

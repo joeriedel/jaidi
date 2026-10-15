@@ -378,7 +378,8 @@ count_fire_delay :: () {
 
 // The objects drawn this frame, for the aiming help.
 clear_drawn_objects :: () { array_reset_keeping_memory(*world.drawn_objects); }
-note_drawn_object :: (index: s32) { array_add(*world.drawn_objects, index); }
+// 32 at most, as the original's list (0x13d19c).
+note_drawn_object :: (index: s32) { if world.drawn_objects.count < 32  array_add(*world.drawn_objects, index); }
 
 // The weapon over the view (0x8dcd0), in 320x200 pixels.
 draw_weapon :: (lighting: Lighting) {
@@ -1552,7 +1553,8 @@ EMPTY_MISSILE_STEPS :: Fire_Step.[.{0, -1, 7, 3, .EMPTY_MISSILES}];
 // The aiming help (0x48028): of the objects drawn last frame that can be aimed at, within
 // about 5 degrees of the yaw, the nearest gives the shot's pitch and yaw, toward three
 // quarters of its height. The direction the shot flies is set by each one in the cone in
-// turn, so it's the last one's: the original's.
+// turn, so it's the last one's: the original's. One behind a wall isn't taken: the
+// original never lists it, its columns hidden by the wall drawn in front.
 aim_at_drawn :: (from: Fixed3, pitch: s32, yaw: s32, variation: s32) -> bool {
     w := *world.weapon;
     closest := FIXED_INFINITY;
@@ -1566,6 +1568,7 @@ aim_at_drawn :: (from: Fixed3, pitch: s32, yaw: s32, variation: s32) -> bool {
         angle := vec2_to_angle(dx, dz) & ANGLE_MASK;
         off := (angle - yaw) & ANGLE_MASK;
         if off > 227 && off < 16111 continue;
+        if !is_in_sight(o) continue;
         dir_x, dir_z, distance := get_direction_and_length(dx, dz);
         w.aim_x, w.aim_z = dir_x, dir_z;
         if distance < closest {
@@ -1583,6 +1586,17 @@ aim_at_drawn :: (from: Fixed3, pitch: s32, yaw: s32, variation: s32) -> bool {
     }
     w.aim_sin_pitch, w.aim_cos_pitch = sin_cos(w.fire_pitch);
     return true;
+}
+
+// Whether a line from the eye reaches the object's head, aim point or feet: the drawn list
+// tests only the window an object is seen through, not the walls in front of it.
+is_in_sight :: (o: *Object) -> bool {
+    p := *world.player;
+    eye := get_player_eye();
+    for Fixed.[o.height - (o.height >> 4), (o.height >> 1) + (o.height >> 2), o.height >> 4] {
+        if can_line_reach(p.sector, o.sector, eye, .{o.position.x, o.position.y - it, o.position.z}) return true;
+    }
+    return false;
 }
 
 #scope_module
