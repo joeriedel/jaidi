@@ -1781,6 +1781,9 @@ parse_inf :: (text: string) {
     }
     count = min(count, 512);
 
+    // The original reads the header with one sscanf into a wall number it never resets, so
+    // an item without NUM: takes the one before it (Executor's se5_s_switch and others).
+    number := 0;
     for 1..count {
         line, ok = next_inf_line(*r);
         if !ok return;
@@ -1792,7 +1795,6 @@ parse_inf :: (text: string) {
         }
         kind := words[1];
         name := "";
-        number := 0;
         for w: 0..words.count-2 {
             if equal_nocase(words[w], "NAME:")  name = words[w + 1];
             if equal_nocase(words[w], "NUM:")   number = parse_int(words[w + 1]);

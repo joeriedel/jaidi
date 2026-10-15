@@ -181,6 +181,28 @@ secbase_lift_carries_player :: () {
     check(p.position.y == -20 * FIXED_ONE && p.sector == 81, "on the lift at %, sector %", at(p), p.sector);
 } @test
 
+// The Executor's smuggler lift 5, lowered, goes back up from the switch uncovered under it:
+// the switch's INF item has no NUM:, and like the original it takes the wall of the item
+// before it, the sign's.
+executor_smuggler_lift_switch_without_num :: () {
+    skip_without_dark();
+    if !start_level("EXECUTOR") return;
+    defer world_unload();
+    level := world_get_level();
+    lift := find_sector_named(level, "smuggler_elev5");
+    if !check(lift >= 0, "no smuggler_elev5 sector") return;
+    s := *level.sectors[lift];
+    if !check(s.floor.altitude == 32 * FIXED_ONE, "the lift starts at %", s.floor.altitude / 65536.0) return;
+    if !place(-924, 32, 112, 0) return;
+    world_send_inf_message(lift, .NEXT_STOP);
+    if !run(400, .{}) return;
+    if !check(s.floor.altitude == 54 * FIXED_ONE, "the lift went down to %", s.floor.altitude / 65536.0) return;
+    if !run(1, .{use = true}) return;
+    if !run(400, .{}) return;
+    p := world_get_player();
+    check(s.floor.altitude == 32 * FIXED_ONE && p.position.y == 32 * FIXED_ONE, "the lift is at %, the player at %", s.floor.altitude / 65536.0, at(p));
+} @test
+
 // The detention center's shuttle, a sliding wall elevator, carries what stands on its deck,
 // a trooper and a 3D model, as far as its walls go (0x5c3c4).
 dtention_shuttle_carries_objects :: () {

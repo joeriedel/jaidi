@@ -1,6 +1,16 @@
 jaidi changelog
 ===============
 
+0.2.6 (2026-10-15)
+------------------
+
+A fix on the Executor.
+
+- Fixed: on the Executor, the switches below the smuggler lifts did nothing, so
+  those lifts never came up.
+
+Still missing: settings and configuration screens.
+
 0.2.5 (2026-10-14)
 ------------------
 
